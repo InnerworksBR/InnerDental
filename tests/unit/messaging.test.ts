@@ -60,6 +60,8 @@ describe("messaging", () => {
     const worker = new MessagingWorker(db as never, evolution as never, { portalBaseUrl: "https://agenda.example", openaiModel: "gpt-4o-mini", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000001", phone: "5513999999999", message_text: "quero marcar", attempts: 1 });
     expect(evolution.sendText).toHaveBeenCalledTimes(1);
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("https://agenda.example/acesso#token="));
+    expect(evolution.sendText).not.toHaveBeenCalledWith("5513999999999", expect.stringContaining("/api/auth/link?token="));
     expect(updates).toContainEqual(expect.objectContaining({ status: "processed", classified_intent: "schedule", processed_action: "portal_link" }));
   });
   it("sends the greeting as interactive buttons when the feature is enabled", async () => {

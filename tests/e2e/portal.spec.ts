@@ -15,6 +15,22 @@ for (const path of ["/", "/acesso"]) {
   });
 }
 
+test("secure access links redeem the fragment by POST and remove it from the address bar", async ({ page }) => {
+  let redemptions = 0;
+  await page.route("**/api/auth/link", async (route) => {
+    redemptions += 1;
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({ token: "preview-safe-token" });
+    await route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ message: "Link inválido ou expirado." }) });
+  });
+
+  await page.goto("/acesso#token=preview-safe-token");
+
+  await expect(page.getByRole("status")).toContainText("Link inválido ou expirado");
+  expect(page.url()).not.toContain("token=");
+  expect(redemptions).toBe(1);
+});
+
 test("agenda shows a safe empty state and opens booking without horizontal overflow", async ({ page }) => {
   await page.route("**/api/appointments", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ appointments: [], profile: { complete: false, name: null, insurancePlanId: null } }) });
