@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { classifyIntent } from "@/domain/messaging/intent";
+import { classifyIntent, isExplicitHumanRequest } from "@/domain/messaging/intent";
 import { appointmentConfirmationRequestInteractiveMessage, appointmentMessage, dailyConfirmationSummaryMessage, isAutomatedReplyEcho, menuActions, otpMessage } from "@/domain/messaging/templates";
 import { findStructuredAnswer } from "@/domain/knowledge/service";
 import { encryptOtp, decryptOtp } from "@/lib/messaging/otp-cipher";
@@ -12,6 +12,7 @@ import { MessagingWorker } from "../../worker/index";
 describe("messaging", () => {
   afterEach(() => vi.unstubAllGlobals());
   it("classifies scheduling and stable menu actions without ever selecting a slot", () => { expect(classifyIntent("Quero remarcar meu horário")).toBe("reschedule"); expect(classifyIntent("Vocês aceitam Unimed?")).toBe("insurance"); expect(classifyIntent(menuActions.agenda)).toBe("schedule"); expect(classifyIntent(menuActions.handoff)).toBe("human"); expect(classifyIntent("texto sem correspondência")).toBe("human"); });
+  it("recognizes explicit requests for human service without treating every unknown question as one", () => { expect(isExplicitHumanRequest("Quero falar com a doutora")).toBe(true); expect(isExplicitHumanRequest("Pode me transferir para um atendente?")).toBe(true); expect(isExplicitHumanRequest("A clínica tem estacionamento?")).toBe(false); });
   it("classifies textual and interactive attendance confirmations", () => { expect(classifyIntent("Confirmo")).toBe("confirm"); expect(classifyIntent("Vou comparecer")).toBe("confirm"); expect(classifyIntent(menuActions.appointmentConfirm)).toBe("confirm"); });
   it("resolves only active structured data supplied by the repository", () => { const answer = findStructuredAnswer("Vocês aceitam meu plano uni?", { plans: [{ id: "1", name: "Unimed", instructions: "Leve a carteirinha." }], aliases: [{ alias: "uni", insurance_plan_id: "1" }], procedures: [], faqs: [] }); expect(answer).toContain("Unimed"); expect(answer).toContain("carteirinha"); });
   it("returns null when knowledge has no safe match", () => { expect(findStructuredAnswer("Qual o preço secreto?", { plans: [], aliases: [], procedures: [], faqs: [] })).toBeNull(); });
@@ -112,9 +113,10 @@ describe("messaging", () => {
     const updates: Record<string, unknown>[] = [];
     const rpc = vi.fn();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({ message: "Sim, a clínica possui estacionamento.", handoff_required: false }) }] }] }), { status: 200, headers: { "Content-Type": "application/json" } })));
-    const knowledgeTable = () => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data: [], error: null }) }) });
+    const knowledgeTable = (data: unknown[] = []) => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data, error: null }) }) });
     const db = { rpc, from: (table: string) => {
-      if (["insurance_plans", "insurance_aliases", "procedures", "faq_entries"].includes(table)) return knowledgeTable();
+      if (table === "faq_entries") return knowledgeTable([{ question: "A clínica tem estacionamento?", answer: "Sim, temos estacionamento." }]);
+      if (["insurance_plans", "insurance_aliases", "procedures"].includes(table)) return knowledgeTable();
       if (table === "access_tokens") return { insert: vi.fn().mockResolvedValue({ error: null }) };
       return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
     } };
@@ -124,6 +126,22 @@ describe("messaging", () => {
     expect(rpc).not.toHaveBeenCalled();
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("estacionamento"));
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "llm_answer" }));
+  });
+  it("forces a handoff when OpenAI claims an answer that is not grounded in clinic knowledge", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const rpc = vi.fn().mockResolvedValue({ data: "00000000-0000-4000-8000-000000000099", error: null });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({ message: "Uma resposta genérica não cadastrada.", handoff_required: false }) }] }] }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    const knowledgeTable = () => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data: [], error: null }) }) });
+    const db = { rpc, from: (table: string) => {
+      if (["insurance_plans", "insurance_aliases", "procedures", "faq_entries"].includes(table)) return knowledgeTable();
+      return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
+    } };
+    const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const worker = new MessagingWorker(db as never, evolution as never, { openaiApiKey: "test-key", openaiModel: "gpt-4o-mini", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000011", phone: "5513999999999", message_text: "Uma dúvida que não está cadastrada", attempts: 1 });
+    expect(rpc).toHaveBeenCalledWith("enqueue_human_handoff", expect.objectContaining({ p_phone: "5513999999999" }));
+    expect(evolution.sendText).not.toHaveBeenCalledWith("5513999999999", expect.stringContaining("resposta genérica"));
+    expect(updates).toContainEqual(expect.objectContaining({ processed_action: "handoff" }));
   });
   it("delivers an idempotently queued handoff alert to the configured doctor number", async () => {
     const updates: Record<string, unknown>[] = [];

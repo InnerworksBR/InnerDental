@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { EvolutionClient } from "../src/integrations/evolution/client.ts";
 import { decryptOtp } from "../src/lib/messaging/otp-cipher.ts";
-import { classifyIntent } from "../src/domain/messaging/intent.ts";
+import { classifyIntent, isExplicitHumanRequest } from "../src/domain/messaging/intent.ts";
 import { handoffNotificationMessage, handoffReason } from "../src/domain/messaging/handoff.ts";
 import {
   accessLinkInteractiveMessage,
@@ -284,22 +284,22 @@ export class MessagingWorker {
       else if (row.message_text === menuActions.insurance) reply = insurancePromptMessage;
       else if (row.message_text === menuActions.procedures) reply = procedurePromptMessage;
       else if (row.message_text === menuActions.unsupportedMedia) reply = unsupportedMediaInteractiveMessage;
-      else if (row.message_text === menuActions.handoff) { reply = humanFallbackMessage; handoff = true; }
+      else if (isExplicitHumanRequest(row.message_text)) { reply = humanFallbackMessage; handoff = true; }
       else {
         const knowledge = await this.loadKnowledge();
+        const structuredAnswer = findStructuredAnswer(row.message_text, knowledge);
         if (this.config.openaiApiKey) {
           try {
             const generated = await generateClinicReply({ apiKey: this.config.openaiApiKey, model: this.config.openaiModel, message: row.message_text, knowledge });
             usedLlm = true;
-            handoff = generated.handoffRequired;
-            reply = handoff ? generated.text : knowledgeAnswerInteractiveMessage(generated.text);
+            handoff = generated.handoffRequired || !structuredAnswer;
+            reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(generated.text);
           } catch (error) {
             log("warn", "openai_reply_failed", { correlationId: row.id, error });
-            const answer = findStructuredAnswer(row.message_text, knowledge);
-            handoff = !answer;
-            reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(`Claro! ${answer}`);
+            handoff = !structuredAnswer;
+            reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(`Claro! ${structuredAnswer}`);
           }
-        } else { const answer = findStructuredAnswer(row.message_text, knowledge); handoff = !answer; reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(`Claro! ${answer}`); }
+        } else { handoff = !structuredAnswer; reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(`Claro! ${structuredAnswer}`); }
       }
       if (handoff) {
         const { data: handoffId, error } = await this.db.rpc("enqueue_human_handoff", { p_inbox_id: row.id, p_phone: row.phone, p_reason: handoffReason(row.message_text) });

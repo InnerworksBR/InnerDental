@@ -1,5 +1,12 @@
 export type MessageIntent = "schedule" | "reschedule" | "cancel" | "confirm" | "insurance" | "procedure" | "faq" | "greeting" | "human";
 function normalized(value: string) { return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim(); }
+export function isExplicitHumanRequest(message: string): boolean {
+  const text = normalized(message);
+  if (text === "menu.handoff") return true;
+  const mentionsPerson = /\b(doutora|dentista|atendente|humano|pessoa|alguem|equipe)\b/.test(text);
+  const asksForContact = /\b(falar|conversar|chamar|transferir|encaminhar|quero|preciso|gostaria)\b/.test(text);
+  return mentionsPerson && asksForContact;
+}
 export function classifyIntent(message: string): MessageIntent {
   const text = normalized(message);
   if (text === "menu.agenda") return "schedule";
