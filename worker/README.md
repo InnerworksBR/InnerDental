@@ -1,6 +1,6 @@
 # Worker de mensageria
 
-Processo separado do Next.js que consome `notification_outbox` e `whatsapp_inbox`, entrega mensagens pela Evolution API e agenda lembretes. Não consulta disponibilidade nem altera consultas.
+Processo separado do Next.js que consome `notification_outbox` e `whatsapp_inbox`, entrega mensagens pela Evolution API, agenda lembretes e sincroniza consultas criadas diretamente no Google Calendar.
 
 ## Execução local
 
@@ -16,13 +16,17 @@ Use `LOG_LEVEL=debug` para acompanhar o início de cada processamento. `LOG_FORM
 
 `WORKER_RECIPIENT_POLICY` é obrigatório e aceita `allowlist` ou `all`. Use `allowlist` em sandbox, preenchendo `WORKER_ALLOWED_RECIPIENTS` com números E.164 sem o sinal de `+`; use `all` somente no ambiente aprovado para atender clientes reais. Na política restrita, o worker bloqueia inbox, OTP e notificações fora da lista; números nunca são incluídos nos logs.
 
-`HANDOFF_NOTIFICATION_PHONE` é obrigatório e recebe o WhatsApp da doutora em formato E.164 brasileiro. Quando uma conversa precisa de atendimento humano, uma mensagem com nome cadastrado, telefone e motivo é enfileirada de forma idempotente e enviada diretamente a esse número. O destino e os dados do paciente não são escritos nos logs.
+`HANDOFF_NOTIFICATION_PHONE` é obrigatório e recebe o WhatsApp da doutora em formato E.164 brasileiro. Quando uma conversa precisa de atendimento humano, uma mensagem com nome cadastrado, telefone e motivo é enfileirada de forma idempotente e enviada diretamente a esse número. O mesmo destino recebe o resumo diário de confirmações, sem que os dados do paciente sejam escritos nos logs.
+
+Cada consulta futura agenda uma solicitação de presença para as 20h do dia anterior em `America/Sao_Paulo`. O paciente confirma pelo botão ou escrevendo “confirmo”; a resposta é idempotente, vinculada ao telefone e não cancela consultas sem resposta. `WORKER_DAILY_SUMMARY_HOUR` define a hora inteira do resumo da doutora, de `0` a `23`, com padrão `8`.
+
+O worker lê os próximos oito dias do Calendar a cada `WORKER_CALENDAR_SYNC_INTERVAL_MS` (padrão: 60 segundos). Um evento direto entra no fluxo somente quando bloqueia horário, não é de dia inteiro, dura 15 ou 30 minutos e termina em `Nome do paciente — telefone`. Exemplo: `Maria Silva — (13) 99999-9999`. Eventos inválidos são ignorados; remoções e mudanças são reconciliadas sem apagar histórico. Se a leitura falhar, o resumo da manhã é adiado para evitar contagem incompleta.
 
 `EVOLUTION_INTERACTIVE_MESSAGES=true` habilita botões nativos. Enquanto estiver `false`, ou se o endpoint interativo falhar, o worker envia o mesmo conteúdo como texto. Antes de habilitar, valide a versão/integração da Evolution e teste respostas de botão em Android, iOS, WhatsApp Web e Desktop.
 
 Cada claim novo recebe `lease_token`, `lease_owner` e expiração. A conclusão exige o token vigente; uma instância atrasada não sobrescreve o trabalho de outra. `WORKER_CONCURRENCY` limita o paralelismo local e `WORKER_LEASE_SECONDS` deve permanecer entre 30 e 900 segundos. Após seis tentativas, o item recebe `dead_lettered_at`, sai do retry automático e permanece visível no painel interno.
 
-Rollout compatível: aplicar `202607230012_message_leases.sql` e `202607270015_handoff_notifications.sql`, configurar `HANDOFF_NOTIFICATION_PHONE`, confirmar as RPCs e somente então promover o worker. Para rollback, parar o worker novo e retornar ao digest anterior; o schema aditivo e todas as mensagens permanecem preservados.
+Rollout compatível: aplicar `202607230012_message_leases.sql`, `202607270015_handoff_notifications.sql`, `202607270016_appointment_confirmations.sql` e `202607270017_direct_calendar_appointments.sql`; configurar o telefone da doutora, as credenciais Google e os intervalos; confirmar as RPCs e somente então promover o worker. Para rollback, parar o worker novo e retornar ao digest anterior; o schema aditivo e todas as mensagens permanecem preservados.
 
 ## Rollback
 

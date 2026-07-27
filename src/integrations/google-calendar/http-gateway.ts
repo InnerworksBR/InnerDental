@@ -1,4 +1,4 @@
-import { CalendarUnavailableError } from "@/domain/availability/service";
+import { CalendarUnavailableError } from "./error.ts";
 import type { TimeInterval } from "@/domain/availability/slots";
 import type { CalendarEvent, CalendarEventInput, CalendarGateway } from "@/integrations/google-calendar/port";
 
@@ -13,11 +13,19 @@ type GoogleEvent = {
 type GoogleResponse = { items?: GoogleEvent[]; nextPageToken?: string };
 
 export class GoogleCalendarHttpGateway implements CalendarGateway {
+  private readonly accessToken: string;
+  private readonly fetcher: typeof fetch;
+  private readonly timeoutMs: number;
+
   constructor(
-    private readonly accessToken: string,
-    private readonly fetcher: typeof fetch = fetch,
-    private readonly timeoutMs = 2_500,
-  ) {}
+    accessToken: string,
+    fetcher: typeof fetch = fetch,
+    timeoutMs = 2_500,
+  ) {
+    this.accessToken = accessToken;
+    this.fetcher = fetcher;
+    this.timeoutMs = timeoutMs;
+  }
 
   async listEvents(calendarId: string, range: TimeInterval): Promise<CalendarEvent[]> {
     try {

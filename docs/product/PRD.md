@@ -59,6 +59,9 @@ O proprietário inicial do painel é o desenvolvedor responsável pela clínica.
 - **RF-055 — Cobertura por plano:** o proprietário deve poder definir, para cada combinação de plano e procedimento, se há aceitação e qual orientação deve ser apresentada à equipe.
 - **RF-056 — Gestão de pacientes:** a equipe interna deve poder buscar pacientes e corrigir nome e plano; alteração de telefone e exclusão de paciente ficam fora do fluxo comum.
 - **RF-057 — Aviso de atendimento humano:** quando uma conversa exigir atendimento da equipe, o sistema deve avisar diretamente o WhatsApp configurado da doutora com nome cadastrado, telefone e motivo da solicitação.
+- **RF-058 — Confirmação de presença pelo WhatsApp:** às 20h do dia anterior, no horário de São Paulo, o sistema deve solicitar confirmação de presença para cada consulta do dia seguinte; o paciente deve poder confirmar no próprio chat por botão ou texto, mantendo o link como apoio para consultar, remarcar ou cancelar.
+- **RF-059 — Resumo diário de confirmações:** diariamente pela manhã, em horário configurável com padrão às 08h de São Paulo, o sistema deve avisar o WhatsApp configurado da doutora com a quantidade confirmada sobre o total de consultas do dia e listar nome e telefone dos pacientes ainda não confirmados.
+- **RF-060 — Importação controlada do Google Calendar:** o sistema deve incluir nas confirmações e no resumo os atendimentos criados diretamente no Google Calendar quando forem eventos cronometrados, bloquearem o horário, tiverem duração suportada e título no padrão `Nome Telefone`; eventos inválidos, bloqueios e registros já vinculados não podem gerar paciente ou mensagem duplicada.
 
 ## Requisitos não funcionais
 
@@ -70,6 +73,8 @@ O proprietário inicial do painel é o desenvolvedor responsável pela clínica.
 - **RNF-016 — Minimização do acompanhante:** o nome da segunda pessoa não pode ser persistido no Supabase, em auditoria, idempotência, logs ou notificações; ele existe somente no evento daquela consulta no Google Calendar.
 - **RNF-017 — Alterações administrativas seguras:** mutações de gestão devem validar origem, autenticação, papel, formato, concorrência e referências; cadastros históricos usam desativação lógica e exibem resultado acionável.
 - **RNF-018 — Entrega confiável do handoff:** o aviso à doutora deve usar fila idempotente, retry limitado e destino configurado fora do código; dados pessoais do aviso não podem ser emitidos em logs.
+- **RNF-019 — Confirmação confiável e privada:** solicitações, respostas e resumos devem ser idempotentes, usar o telefone autenticado pelo webhook e a fila durável existente, não expor dados pessoais em logs e não alterar nem cancelar uma consulta por ausência de resposta.
+- **RNF-020 — Sincronização externa segura:** a importação deve ser somente leitura no Google Calendar, idempotente por evento e profissional, falhar fechada sem reconciliar exclusões quando a leitura estiver indisponível, não sobrescrever o nome de paciente já cadastrado e não extrair destinatários de títulos ambíguos.
 
 ## Regras de negócio
 
@@ -87,6 +92,12 @@ O proprietário inicial do painel é o desenvolvedor responsável pela clínica.
 - Filas, tokens, holds, inbox, outbox e logs não possuem edição livre; ações operacionais futuras devem ser comandos controlados.
 - O proprietário altera configurações e acessos; o operador pode consultá-los e operar agenda, pacientes e incidentes.
 - O motivo do atendimento humano usa a solicitação original normalizada e limitada; o botão “Falar com equipe” usa uma descrição explícita. O nome é obtido pelo telefone e pode aparecer como “Não informado” quando ainda não houver cadastro.
+- Consulta agendada e presença confirmada são estados distintos; confirmar presença não recria a consulta nem altera sua ocupação no Google Calendar.
+- A resposta “confirmo” só confirma automaticamente quando existe uma única consulta futura elegível para o telefone remetente; ambiguidades direcionam o paciente à agenda segura.
+- Remarcação reinicia a confirmação de presença; falta de resposta mantém a consulta agendada como pendente de confirmação.
+- O resumo diário exclui consultas canceladas, apresenta `0 de 0` nos dias sem consultas e usa o mesmo número configurado para avisos operacionais da doutora.
+- A importação de evento direto aceita somente título com nome não vazio seguido por telefone brasileiro válido, evento não transparente, não integral e duração de 15 ou 30 minutos.
+- Um evento direto movido reinicia a confirmação; um evento removido ou que deixe de atender aos critérios deixa de participar de novas mensagens e do resumo, sem apagar o histórico importado.
 
 ## Critérios de aceitação
 
@@ -112,6 +123,9 @@ O proprietário inicial do painel é o desenvolvedor responsável pela clínica.
 - **CA-055:** a matriz plano × procedimento salva aceitação e orientação e pode ser consultada na central de gestão.
 - **CA-056:** busca de pacientes retorna nome, telefone mascarado, plano e histórico básico; edição comum não permite alterar telefone.
 - **CA-057:** um handoff cria uma única notificação enfileirada para a doutora; a mensagem entregue contém nome ou fallback, telefone legível e motivo, e uma nova tentativa do inbox não cria um segundo evento para o mesmo handoff.
+- **CA-058:** cada consulta ativa do dia seguinte recebe no máximo uma solicitação para a versão vigente do horário, disponível às 20h; botão ou texto de confirmação do mesmo telefone registra presença uma única vez, responde com sucesso e não confunde múltiplas consultas nem consultas inexistentes.
+- **CA-059:** uma única mensagem por data é disponibilizada no horário matinal configurado; ela informa `confirmadas de total` e, quando houver pendências, lista nome, telefone legível e horário sem incluir esses dados nos logs.
+- **CA-060:** após sincronização bem-sucedida, evento direto válido cria ou atualiza uma única consulta importada e entra no mesmo fluxo das 20h; evento já vinculado não é duplicado, título/telefone/duração inválidos são ignorados, e remoção ou alteração inválida cancela somente a projeção importada correspondente.
 
 ## Métricas de sucesso
 
@@ -130,4 +144,4 @@ O proprietário inicial do painel é o desenvolvedor responsável pela clínica.
 
 ## Aprovação
 
-Status: aprovado pelo solicitante em 2026-07-17; extensão de atendimento conjunto, identificação `Nome Telefone` e aviso pré-confirmação aprovada em 2026-07-27; central completa de gestão RF-047–RF-056 e RNF-017 aprovada em 2026-07-27; aviso direto de handoff RF-057 e RNF-018 aprovado em 2026-07-27.
+Status: aprovado pelo solicitante em 2026-07-17; extensão de atendimento conjunto, identificação `Nome Telefone` e aviso pré-confirmação aprovada em 2026-07-27; central completa de gestão RF-047–RF-056 e RNF-017 aprovada em 2026-07-27; aviso direto de handoff RF-057 e RNF-018 aprovado em 2026-07-27; confirmação de presença às 20h e resumo matinal RF-058–RF-059 e RNF-019 aprovados pelo solicitante em 2026-07-27; inclusão controlada de eventos diretos do Google Calendar RF-060 e RNF-020 aprovada pelo solicitante em 2026-07-27 com a instrução “pode seguir então”.

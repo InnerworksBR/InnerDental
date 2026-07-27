@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyIntent } from "@/domain/messaging/intent";
-import { appointmentMessage, isAutomatedReplyEcho, menuActions, otpMessage } from "@/domain/messaging/templates";
+import { appointmentConfirmationRequestInteractiveMessage, appointmentMessage, dailyConfirmationSummaryMessage, isAutomatedReplyEcho, menuActions, otpMessage } from "@/domain/messaging/templates";
 import { findStructuredAnswer } from "@/domain/knowledge/service";
 import { encryptOtp, decryptOtp } from "@/lib/messaging/otp-cipher";
 import { signEvolutionPayload, verifyEvolutionApiKey, verifyEvolutionSignature } from "@/integrations/evolution/signature";
@@ -12,6 +12,7 @@ import { MessagingWorker } from "../../worker/index";
 describe("messaging", () => {
   afterEach(() => vi.unstubAllGlobals());
   it("classifies scheduling and stable menu actions without ever selecting a slot", () => { expect(classifyIntent("Quero remarcar meu horário")).toBe("reschedule"); expect(classifyIntent("Vocês aceitam Unimed?")).toBe("insurance"); expect(classifyIntent(menuActions.agenda)).toBe("schedule"); expect(classifyIntent(menuActions.handoff)).toBe("human"); expect(classifyIntent("texto sem correspondência")).toBe("human"); });
+  it("classifies textual and interactive attendance confirmations", () => { expect(classifyIntent("Confirmo")).toBe("confirm"); expect(classifyIntent("Vou comparecer")).toBe("confirm"); expect(classifyIntent(menuActions.appointmentConfirm)).toBe("confirm"); });
   it("resolves only active structured data supplied by the repository", () => { const answer = findStructuredAnswer("Vocês aceitam meu plano uni?", { plans: [{ id: "1", name: "Unimed", instructions: "Leve a carteirinha." }], aliases: [{ alias: "uni", insurance_plan_id: "1" }], procedures: [], faqs: [] }); expect(answer).toContain("Unimed"); expect(answer).toContain("carteirinha"); });
   it("returns null when knowledge has no safe match", () => { expect(findStructuredAnswer("Qual o preço secreto?", { plans: [], aliases: [], procedures: [], faqs: [] })).toBeNull(); });
   it("encrypts OTP at rest and rejects a wrong key", () => { const secret = "a".repeat(32), encrypted = encryptOtp("123456", secret); expect(encrypted).not.toContain("123456"); expect(decryptOtp(encrypted, secret)).toBe("123456"); expect(() => decryptOtp(encrypted, "b".repeat(32))).toThrow(); });
@@ -48,6 +49,16 @@ describe("messaging", () => {
     expect(operation).toHaveBeenCalledTimes(2); expect(sleep).toHaveBeenCalledWith(5);
   });
   it("uses scannable safe templates without clinical details", () => { expect(otpMessage("123456")).toContain("*123456*"); expect(appointmentMessage("appointment.cancelled", "2026-07-20T12:00:00Z")).toContain("Consulta cancelada"); expect(appointmentMessage("appointment.created", "2026-07-24T17:30:00Z")).toContain("14h30"); });
+  it("offers one-tap attendance confirmation with a textual fallback", () => {
+    const message = appointmentConfirmationRequestInteractiveMessage("2099-07-28T13:00:00Z", "https://agenda.example/acesso#token=abc", "Dra. Priscila");
+    expect(message.buttons).toContainEqual(expect.objectContaining({ type: "reply", id: menuActions.appointmentConfirm, displayText: "Sim, confirmo" }));
+    expect(message.fallbackText).toMatch(/Responda \*CONFIRMO\*[\s\S]*agenda\.example/);
+  });
+  it("formats the doctor summary with confirmed totals and readable pending contacts", () => {
+    const message = dailyConfirmationSummaryMessage({ summary_date: "2026-07-28", total: 3, confirmed: 1, unconfirmed: [{ name: "Ana Souza", phone: "5513999999999", start_at: "2026-07-28T12:00:00Z" }, { name: "Bruno Lima", phone: "5513988887777", start_at: "2026-07-28T13:00:00Z" }] });
+    expect(message).toMatch(/1 de 3[\s\S]*Ana Souza[\s\S]*\+55 \(13\) 99999-9999[\s\S]*Bruno Lima/);
+    expect(dailyConfirmationSummaryMessage({ summary_date: "2026-07-28", total: 0, confirmed: 0, unconfirmed: [] })).toContain("0 de 0");
+  });
   it("exposes health state and stops safely", () => { const worker = new MessagingWorker({} as never, {} as never, { pollMs: 100, healthPort: 3001 } as never); expect(worker.healthy()).toBe(true); worker.stop(); expect(worker.healthy()).toBe(false); });
   it("persists an allowed action after sending a scheduling reply", async () => {
     const updates: Record<string, unknown>[] = [];
@@ -122,6 +133,47 @@ describe("messaging", () => {
     await worker.processOutbox({ id: "00000000-0000-4000-8000-000000000010", aggregate_id: "00000000-0000-4000-8000-000000000011", event_type: "appointment.created", attempts: 1 });
     expect(evolution.sendButtons).toHaveBeenCalledWith("5513999999999", expect.objectContaining({ description: expect.stringContaining("Dra. Priscila"), buttons: [expect.objectContaining({ type: "url", displayText: "Gerenciar consulta" })] }));
     expect(outboxUpdates).toContainEqual(expect.objectContaining({ status: "sent" }));
+  });
+  it("confirms the single upcoming appointment directly from chat", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const rpc = vi.fn().mockResolvedValue({ data: { status: "confirmed", start_at: "2099-07-28T13:00:00Z" }, error: null });
+    const db = { rpc, from: () => ({ update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) }) };
+    const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const worker = new MessagingWorker(db as never, evolution as never, { recipientPolicy: "all", pollMs: 100, healthPort: 3001 } as never);
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000020", phone: "5513999999999", message_text: "confirmo", attempts: 1 });
+    expect(rpc).toHaveBeenCalledWith("confirm_upcoming_appointment_by_phone", { p_phone: "5513999999999" });
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("Presença confirmada"));
+    expect(updates).toContainEqual(expect.objectContaining({ classified_intent: "confirm", processed_action: "appointment_confirmed" }));
+  });
+  it("delivers a current 20h confirmation request and marks stale schedules as consumed", async () => {
+    const outboxUpdates: Record<string, unknown>[] = [];
+    const appointmentUpdates: Record<string, unknown>[] = [];
+    const currentStart = "2099-07-28T13:00:00.000Z";
+    const db = { from: (table: string) => {
+      if (table === "appointments") return {
+        select: () => ({ eq: () => ({ single: vi.fn().mockResolvedValue({ data: { start_at: currentStart, status: "scheduled", patients: { phone: "5513999999999" }, professionals: { name: "Dra. Priscila" } }, error: null }) }) }),
+        update: (values: Record<string, unknown>) => ({ eq: () => ({ eq: vi.fn().mockImplementation(async () => { appointmentUpdates.push(values); return { error: null }; }) }) }),
+      };
+      if (table === "access_tokens") return { insert: vi.fn().mockResolvedValue({ error: null }) };
+      return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { outboxUpdates.push(values); return { error: null }; }) }) };
+    } };
+    const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const worker = new MessagingWorker(db as never, evolution as never, { portalBaseUrl: "https://agenda.example", recipientPolicy: "all", pollMs: 100, healthPort: 3001 } as never);
+    await worker.processOutbox({ id: "00000000-0000-4000-8000-000000000021", aggregate_id: "00000000-0000-4000-8000-000000000022", event_type: "appointment.confirmation_requested", attempts: 1, payload: { scheduled_start_at: currentStart } });
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("CONFIRMO"));
+    expect(appointmentUpdates).toContainEqual(expect.objectContaining({ attendance_confirmation_requested_at: expect.any(String) }));
+    expect(outboxUpdates).toContainEqual(expect.objectContaining({ status: "sent" }));
+  });
+  it("sends the idempotently queued daily summary only to the configured doctor", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const rpc = vi.fn().mockResolvedValue({ data: { summary_date: "2026-07-28", total: 2, confirmed: 1, unconfirmed: [{ name: "Ana Souza", phone: "5513999999999", start_at: "2026-07-28T12:00:00Z" }] }, error: null });
+    const db = { rpc, from: () => ({ update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) }) };
+    const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const worker = new MessagingWorker(db as never, evolution as never, { handoffNotificationPhone: "5513988887777", recipientPolicy: "all", pollMs: 100, healthPort: 3001 } as never);
+    await worker.processOutbox({ id: "00000000-0000-4000-8000-000000000023", aggregate_id: "00000000-0000-0000-0000-000000000000", event_type: "clinic.daily_confirmation_summary", attempts: 1, payload: { summary_date: "2026-07-28" } });
+    expect(rpc).toHaveBeenCalledWith("get_daily_confirmation_summary", { p_summary_date: "2026-07-28" });
+    expect(evolution.sendText).toHaveBeenCalledWith("5513988887777", expect.stringMatching(/1 de 2[\s\S]*Ana Souza/));
+    expect(updates).toContainEqual(expect.objectContaining({ status: "sent" }));
   });
   it("finalizes a leased inbox message through the atomic RPC", async () => {
     const rpc = vi.fn().mockResolvedValue({ data: true, error: null });

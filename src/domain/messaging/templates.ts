@@ -1,4 +1,5 @@
 import type { MessageIntent } from "./intent";
+import { readableBrazilianPhone } from "./handoff.ts";
 
 export const menuActions = {
   agenda: "menu.agenda",
@@ -7,6 +8,7 @@ export const menuActions = {
   insurance: "menu.insurance",
   procedures: "menu.procedures",
   unsupportedMedia: "menu.unsupported_media",
+  appointmentConfirm: "appointment.confirm",
 } as const;
 
 export type InteractiveButton =
@@ -95,6 +97,65 @@ export function appointmentInteractiveMessage(event: string, startAt: string, ac
   };
 }
 
+export function appointmentConfirmationRequestMessage(startAt: string, accessUrl: string, professionalName?: string) {
+  const { day, time } = appointmentDate(startAt);
+  const professional = professionalName ? `\n👤 ${professionalName}` : "";
+  return `📅 *Confirme sua presença*\n\nSua consulta é amanhã:\n📆 ${day}\n🕒 ${time}${professional}\n\nResponda *CONFIRMO* por aqui. Para remarcar ou cancelar, use sua agenda:\n${accessUrl}`;
+}
+
+export function appointmentConfirmationRequestInteractiveMessage(startAt: string, accessUrl: string, professionalName?: string): InteractiveMessage {
+  const { day, time } = appointmentDate(startAt);
+  const professional = professionalName ? `\n👤 ${professionalName}` : "";
+  return {
+    title: "📅 Confirme sua presença",
+    description: `Sua consulta é amanhã:\n📆 ${day}\n🕒 ${time}${professional}`,
+    footer: "Luna Agenda",
+    buttons: [
+      { type: "reply", id: menuActions.appointmentConfirm, displayText: "Sim, confirmo" },
+      { type: "url", displayText: "Remarcar ou cancelar", url: accessUrl },
+    ],
+    fallbackText: appointmentConfirmationRequestMessage(startAt, accessUrl, professionalName),
+  };
+}
+
+export function attendanceConfirmationReplyMessage(status: "confirmed" | "already_confirmed" | "not_found" | "ambiguous", startAt?: string, accessUrl?: string) {
+  if (status === "confirmed" && startAt) {
+    const { day, time } = appointmentDate(startAt);
+    return `✅ *Presença confirmada*\n\nTudo certo para ${day}, às ${time}. Até lá!`;
+  }
+  if (status === "already_confirmed" && startAt) {
+    const { day, time } = appointmentDate(startAt);
+    return `✅ *Presença já confirmada*\n\nSua confirmação para ${day}, às ${time}, já estava registrada.`;
+  }
+  const link = accessUrl ? `\n\nAbra sua agenda segura para conferir:\n${accessUrl}` : "";
+  if (status === "ambiguous") return `*Confirmação de presença*\n\nEncontrei mais de uma consulta próxima e não quero confirmar a errada.${link}`;
+  return `*Confirmação de presença*\n\nNão encontrei uma consulta próxima aguardando sua confirmação.${link}`;
+}
+
+export type DailyConfirmationSummary = {
+  summary_date: string;
+  total: number;
+  confirmed: number;
+  unconfirmed: Array<{ name: string; phone: string; start_at: string }>;
+};
+
+function safeSummaryText(value: string, fallback: string) {
+  return value.replace(/[\r\n\t]+/g, " ").replace(/[*_~`]/g, "").replace(/\s+/g, " ").trim().slice(0, 160) || fallback;
+}
+
+export function dailyConfirmationSummaryMessage(summary: DailyConfirmationSummary) {
+  const date = new Intl.DateTimeFormat("pt-BR", { dateStyle: "long", timeZone: "America/Sao_Paulo" }).format(new Date(`${summary.summary_date}T12:00:00-03:00`));
+  const heading = `📋 *Confirmações de hoje*\n${date.charAt(0).toUpperCase() + date.slice(1)}`;
+  if (summary.total === 0) return `${heading}\n\nHoje não há consultas agendadas.\n\n✅ 0 de 0 confirmadas.`;
+  const count = `✅ *${summary.confirmed} de ${summary.total}* ${summary.total === 1 ? "consulta confirmada" : "consultas confirmadas"}.`;
+  if (summary.unconfirmed.length === 0) return `${heading}\n\n${count}\n\nTodos os pacientes confirmaram presença.`;
+  const pending = summary.unconfirmed.map((item) => {
+    const time = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" }).format(new Date(item.start_at));
+    return `• ${time} — ${safeSummaryText(item.name, "Não informado")} — ${readableBrazilianPhone(item.phone)}`;
+  }).join("\n");
+  return `${heading}\n\n${count}\n\n⏳ *Ainda não confirmaram:*\n${pending}`;
+}
+
 export const greetingMessage = "Olá! Sou a assistente virtual da Luna 😊\n\nComo posso ajudar?\n\n• Agendar ou gerenciar uma consulta\n• Tirar dúvidas sobre planos e procedimentos\n• Falar com a equipe\n\nVocê pode escrever sua dúvida ou escolher uma opção.";
 
 export const greetingInteractiveMessage: InteractiveMessage = {
@@ -158,5 +219,10 @@ export function isAutomatedReplyEcho(text: string) {
     || value.startsWith("✅ *Consulta remarcada*")
     || value.startsWith("❌ *Consulta cancelada*")
     || value.startsWith("⏰ *Lembrete da consulta*")
+    || value.startsWith("📅 *Confirme sua presença*")
+    || value.startsWith("✅ *Presença confirmada*")
+    || value.startsWith("✅ *Presença já confirmada*")
+    || value.startsWith("*Confirmação de presença*")
+    || value.startsWith("📋 *Confirmações de hoje*")
     || value.startsWith("*Seu código de acesso*");
 }

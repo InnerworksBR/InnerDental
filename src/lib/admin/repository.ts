@@ -12,6 +12,7 @@ type AppointmentRow = {
   end_at: string;
   status: string;
   source: string;
+  calendar_origin?: "system" | "direct";
   calendar_event_id: string | null;
   patients: { name: string | null; phone: string } | { name: string | null; phone: string }[] | null;
   professionals: { name: string } | { name: string }[] | null;
@@ -38,7 +39,7 @@ export function projectAppointment(row: AppointmentRow) {
     startAt: row.start_at,
     endAt: row.end_at,
     status: row.status,
-    source: row.source,
+    source: row.calendar_origin === "direct" ? "google_calendar" : row.source,
     calendarEventId: row.calendar_event_id,
     patientName: patient?.name ?? "Paciente",
     agendaLabel: patient ? `${patient.name ?? "Paciente"} ${patient.phone}` : "Paciente",
@@ -129,7 +130,7 @@ export async function listAdminAgendaRange(startDate: string, endDate: string) {
   const start = `${startDate}T00:00:00-03:00`;
   const end = `${nextDate(endDate)}T00:00:00-03:00`;
   const [appointments, blocks, professionals] = await Promise.all([
-    client.from("appointments").select("id,start_at,end_at,status,source,calendar_event_id,patients(name,phone),professionals(name)").gte("start_at", start).lt("start_at", end).order("start_at"),
+    client.from("appointments").select("id,start_at,end_at,status,source,calendar_origin,calendar_event_id,patients(name,phone),professionals(name)").gte("start_at", start).lt("start_at", end).order("start_at"),
     client.from("calendar_blocks").select("id,date,status,calendar_event_id,professionals(name)").gte("date", startDate).lte("date", endDate).order("date").order("created_at"),
     client.from("professionals").select("id,name,calendar_id").eq("active", true).order("name"),
   ]);

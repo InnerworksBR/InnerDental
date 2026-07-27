@@ -10,7 +10,7 @@ Versão 1.0 — preparação para homologação. Este runbook não autoriza aces
 - Backup recente do Supabase com restore previamente validado.
 - Domínio apontado para a VPS e proxy HTTPS. O exemplo `deploy/Caddyfile.example` pressupõe Caddy instalado no host e publica apenas o web; o worker não recebe domínio nem porta pública. Se o proxy também estiver em contêiner, conecte-o a uma rede Docker externa compartilhada em vez de abrir a porta do worker.
 - `deploy/web.env` e `deploy/worker.env` criados a partir dos exemplos, com permissão `600`, fora de commits e anexos.
-- Migrations ausentes identificadas. Para esta versão, confirmar especialmente `202607270014_management_soft_deactivation.sql` e `202607270015_handoff_notifications.sql`.
+- Migrations ausentes identificadas. Para esta versão, confirmar especialmente `202607270016_appointment_confirmations.sql` e `202607270017_direct_calendar_appointments.sql`.
 
 ## Artefatos e isolamento
 
@@ -31,7 +31,7 @@ cp deploy/worker.env.example deploy/worker.env
 chmod 600 deploy/web.env deploy/worker.env
 ```
 
-Preencher os arquivos sem reutilizar placeholders. `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` são incorporados no build web; alterá-los exige novo build. `HANDOFF_NOTIFICATION_PHONE` existe somente no worker. Em homologação, manter `WORKER_RECIPIENT_POLICY=allowlist` e incluir apenas números autorizados.
+Preencher os arquivos sem reutilizar placeholders. `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` são incorporados no build web; alterá-los exige novo build. `HANDOFF_NOTIFICATION_PHONE` existe somente no worker e recebe handoffs e o resumo diário; `WORKER_DAILY_SUMMARY_HOUR` usa hora inteira de São Paulo e tem padrão `8`. O worker também exige `GOOGLE_SERVICE_ACCOUNT_EMAIL` e `GOOGLE_PRIVATE_KEY`; `WORKER_CALENDAR_SYNC_INTERVAL_MS` tem padrão `60000`. Em homologação, manter `WORKER_RECIPIENT_POLICY=allowlist` e incluir apenas números autorizados.
 
 Validar os manifests sem iniciar contêineres:
 

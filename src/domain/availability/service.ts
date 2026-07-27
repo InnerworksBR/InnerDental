@@ -1,16 +1,13 @@
 import { generateSlots, overlaps, type TimeInterval, type TimePeriod } from "@/domain/availability/slots";
+import { CalendarUnavailableError } from "@/integrations/google-calendar/error";
+
+export { CalendarUnavailableError } from "@/integrations/google-calendar/error";
 
 export type AvailabilityException = {
   type: "available" | "blocked" | "holiday" | "vacation";
   startTime: string | null;
   endTime: string | null;
 };
-
-export class CalendarUnavailableError extends Error {
-  constructor() {
-    super("Calendar availability could not be verified");
-  }
-}
 
 function appliesToSlot(exception: AvailabilityException, slot: TimeInterval): boolean {
   if (!exception.startTime || !exception.endTime) return true;

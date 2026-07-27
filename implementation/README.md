@@ -19,6 +19,7 @@ Planejamento criado a partir de `PRD.md` em 2026-07-16. As implementações 010 
 | 013 | Proteção de dados e entrega controlada | concluída localmente; ensaio real e rollout externo pendentes | 010, 012 | backup criptografado, restore, migrations, release e rollback |
 | 014 | Atendimento conjunto e confirmação informada | implementada localmente; migration e smoke externos pendentes | 003, 004, 005, 008 | 15/30 minutos, segundo nome transitório, limitações e padrão da agenda |
 | 015 | Central de gestão clínica e operacional | implementada e validada localmente; migration e smoke autenticado externos pendentes | 001, 006, 008, 009 | cadastros, agenda, conteúdo, pacientes, equipe e auditoria |
+| 016 | Confirmação de presença e resumo diário | concluída e validada localmente; migrations e rollout externos pendentes | 004, 006, 011 | confirmação às 20h, resposta no chat, eventos diretos e resumo matinal para a doutora |
 
 ## Ordem recomendada
 
@@ -32,6 +33,8 @@ Planejamento criado a partir de `PRD.md` em 2026-07-16. As implementações 010 
 
 `(001 + 006 + 008 + 009) → 015`
 
+`(004 + 006 + 011) → 016`
+
 ## Cobertura do PRD
 
 - RF-001–RF-003, RF-010–RF-011: implementação 003.
@@ -42,6 +45,7 @@ Planejamento criado a partir de `PRD.md` em 2026-07-16. As implementações 010 
 - RF-016–RF-023, RNF-011–RNF-015 e CA-016–CA-023: implementação 008.
 - RF-044–RF-046, RNF-016 e CA-044–CA-046: implementação 014.
 - RF-047–RF-056, RNF-017 e CA-047–CA-056: implementação 015.
+- RF-058–RF-060, RNF-019–RNF-020 e CA-058–CA-060: implementação 016.
 
 ## Matriz de rastreabilidade do PRD
 

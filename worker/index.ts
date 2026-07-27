@@ -8,7 +8,10 @@ import { classifyIntent } from "../src/domain/messaging/intent.ts";
 import { handoffNotificationMessage, handoffReason } from "../src/domain/messaging/handoff.ts";
 import {
   accessLinkInteractiveMessage,
+  appointmentConfirmationRequestInteractiveMessage,
   appointmentInteractiveMessage,
+  attendanceConfirmationReplyMessage,
+  dailyConfirmationSummaryMessage,
   greetingInteractiveMessage,
   humanFallbackMessage,
   insurancePromptMessage,
@@ -19,17 +22,24 @@ import {
   questionsInteractiveMessage,
   unsupportedMediaInteractiveMessage,
   type InteractiveMessage,
+  type DailyConfirmationSummary,
 } from "../src/domain/messaging/templates.ts";
 import { findStructuredAnswer, type KnowledgeData } from "../src/domain/knowledge/service.ts";
 import { generateClinicReply } from "../src/integrations/openai/chat.ts";
 import { isCorrelationId, log } from "../src/lib/observability/logger.ts";
 import { incrementCounter, renderPrometheusMetrics, setGauge } from "../src/lib/observability/metrics.ts";
 import { normalizeBrazilianPhone } from "../src/lib/phone/normalize.ts";
+import {
+  GoogleServiceAccountAuth,
+  readGoogleServiceAccountCredentials,
+  type GoogleServiceAccountCredentials,
+} from "../src/integrations/google-calendar/service-account-auth.ts";
+import { syncDirectCalendarAppointments } from "./calendar-sync.ts";
 
-type OutboxRow = { id: string; aggregate_id: string; event_type: string; attempts: number; lease_token?: string; payload?: { correlation_id?: unknown } };
+type OutboxRow = { id: string; aggregate_id: string; event_type: string; attempts: number; lease_token?: string; payload?: { correlation_id?: unknown; scheduled_start_at?: unknown; summary_date?: unknown } };
 type InboxRow = { id: string; phone: string; message_text: string; attempts: number; lease_token?: string };
 type RecipientPolicy = "all" | "allowlist";
-type Config = { supabaseUrl: string; supabaseKey: string; evolutionBaseUrl: string; evolutionApiKey: string; evolutionInstance: string; otpSecret: string; portalBaseUrl: string; handoffNotificationPhone: string; openaiApiKey?: string; openaiModel: string; interactiveMessages?: boolean; recipientPolicy?: RecipientPolicy; pollMs: number; healthPort: number; workerId?: string; concurrency?: number; leaseSeconds?: number; allowedRecipients?: string[] };
+type Config = { supabaseUrl: string; supabaseKey: string; evolutionBaseUrl: string; evolutionApiKey: string; evolutionInstance: string; otpSecret: string; portalBaseUrl: string; handoffNotificationPhone: string; dailySummaryHour?: number; googleCredentials?: GoogleServiceAccountCredentials; googleCalendarId?: string; calendarSyncIntervalMs?: number; openaiApiKey?: string; openaiModel: string; interactiveMessages?: boolean; recipientPolicy?: RecipientPolicy; pollMs: number; healthPort: number; workerId?: string; concurrency?: number; leaseSeconds?: number; allowedRecipients?: string[] };
 
 function required(name: string) { const value = process.env[name]?.trim(); if (!value) throw new Error(`Missing ${name}`); return value; }
 function booleanSetting(name: string, fallback = false) { const value = process.env[name]?.trim().toLowerCase(); if (!value) return fallback; if (value === "true") return true; if (value === "false") return false; throw new Error(`${name}_INVALID`); }
@@ -43,6 +53,9 @@ export function loadWorkerConfig(): Config {
   const healthPort = Number(process.env.WORKER_HEALTH_PORT ?? 3001);
   const concurrency = Number(process.env.WORKER_CONCURRENCY ?? 5);
   const leaseSeconds = Number(process.env.WORKER_LEASE_SECONDS ?? 300);
+  const dailySummaryHour = Number(process.env.WORKER_DAILY_SUMMARY_HOUR ?? 8);
+  const calendarSyncIntervalMs = Number(process.env.WORKER_CALENDAR_SYNC_INTERVAL_MS ?? 60_000);
+  const googleCredentials = readGoogleServiceAccountCredentials();
   const recipientPolicy = required("WORKER_RECIPIENT_POLICY") as RecipientPolicy;
   if (!["all", "allowlist"].includes(recipientPolicy)) throw new Error("WORKER_RECIPIENT_POLICY_INVALID");
   const allowedRecipients = (process.env.WORKER_ALLOWED_RECIPIENTS ?? "").split(",").map((phone) => phone.trim()).filter(Boolean).map(normalizeBrazilianPhone);
@@ -51,7 +64,9 @@ export function loadWorkerConfig(): Config {
   try { handoffNotificationPhone = normalizeBrazilianPhone(required("HANDOFF_NOTIFICATION_PHONE")); }
   catch { throw new Error("HANDOFF_NOTIFICATION_PHONE_INVALID"); }
   if (!Number.isFinite(pollMs) || pollMs < 250 || !Number.isInteger(healthPort) || healthPort < 1 || healthPort > 65535 || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 20 || !Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) throw new Error("WORKER_INTERVAL_OR_PORT_INVALID");
-  return { supabaseUrl: required("NEXT_PUBLIC_SUPABASE_URL"), supabaseKey: required("SUPABASE_SECRET_KEY"), evolutionBaseUrl: required("EVOLUTION_BASE_URL"), evolutionApiKey: required("EVOLUTION_API_KEY"), evolutionInstance: required("EVOLUTION_INSTANCE"), otpSecret, portalBaseUrl: portal.toString().replace(/\/$/, ""), handoffNotificationPhone, openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined, openaiModel: process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini", interactiveMessages: booleanSetting("EVOLUTION_INTERACTIVE_MESSAGES"), recipientPolicy, pollMs, healthPort, workerId: process.env.WORKER_ID?.trim() || `worker-${randomUUID()}`, concurrency, leaseSeconds, allowedRecipients: [...new Set(allowedRecipients)] };
+  if (!Number.isInteger(dailySummaryHour) || dailySummaryHour < 0 || dailySummaryHour > 23) throw new Error("WORKER_DAILY_SUMMARY_HOUR_INVALID");
+  if (!Number.isInteger(calendarSyncIntervalMs) || calendarSyncIntervalMs < 15_000 || calendarSyncIntervalMs > 3_600_000) throw new Error("WORKER_CALENDAR_SYNC_INTERVAL_MS_INVALID");
+  return { supabaseUrl: required("NEXT_PUBLIC_SUPABASE_URL"), supabaseKey: required("SUPABASE_SECRET_KEY"), evolutionBaseUrl: required("EVOLUTION_BASE_URL"), evolutionApiKey: required("EVOLUTION_API_KEY"), evolutionInstance: required("EVOLUTION_INSTANCE"), otpSecret, portalBaseUrl: portal.toString().replace(/\/$/, ""), handoffNotificationPhone, dailySummaryHour, googleCredentials, googleCalendarId: process.env.GOOGLE_CALENDAR_ID?.trim() || undefined, calendarSyncIntervalMs, openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined, openaiModel: process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini", interactiveMessages: booleanSetting("EVOLUTION_INTERACTIVE_MESSAGES"), recipientPolicy, pollMs, healthPort, workerId: process.env.WORKER_ID?.trim() || `worker-${randomUUID()}`, concurrency, leaseSeconds, allowedRecipients: [...new Set(allowedRecipients)] };
 }
 const opaqueToken = () => randomBytes(32).toString("base64url");
 const tokenHash = (token: string) => createHash("sha256").update(token, "utf8").digest("hex");
@@ -59,15 +74,38 @@ const retryAt = (attempts: number) => new Date(Date.now() + Math.min(60_000, 100
 
 export class MessagingWorker {
   private stopped = false; private lastPoll = Date.now(); private lastQueueHealthAt = 0; private pollNumber = 0;
+  private lastCalendarSyncAt = 0; private calendarSyncHealthy = true;
+  private readonly calendarAuth?: GoogleServiceAccountAuth;
   private readonly db: SupabaseClient; private readonly evolution: EvolutionClient; private readonly config: Config;
-  constructor(db: SupabaseClient, evolution: EvolutionClient, config: Config) { this.db = db; this.evolution = evolution; this.config = { ...config, workerId: config.workerId ?? `worker-${randomUUID()}`, concurrency: config.concurrency ?? 5, leaseSeconds: config.leaseSeconds ?? 300, interactiveMessages: config.interactiveMessages ?? false, recipientPolicy: config.recipientPolicy ?? "allowlist" }; }
+  constructor(db: SupabaseClient, evolution: EvolutionClient, config: Config) { this.db = db; this.evolution = evolution; this.config = { ...config, workerId: config.workerId ?? `worker-${randomUUID()}`, concurrency: config.concurrency ?? 5, leaseSeconds: config.leaseSeconds ?? 300, interactiveMessages: config.interactiveMessages ?? false, recipientPolicy: config.recipientPolicy ?? "allowlist", calendarSyncIntervalMs: config.calendarSyncIntervalMs ?? 60_000 }; this.calendarAuth = config.googleCredentials ? new GoogleServiceAccountAuth(config.googleCredentials) : undefined; }
   private recipientAllowed(phone: string) { return this.config.recipientPolicy === "all" || (this.config.allowedRecipients ?? []).includes(phone); }
   async tick() {
     if (this.stopped) return;
     const startedAt = Date.now();
     const pollNumber = ++this.pollNumber;
     log("debug", "worker_poll_started", { pollNumber });
-    await Promise.all([this.db.rpc("enqueue_due_appointment_reminders", { batch_size: 100 }), this.db.rpc("purge_expired_otp_delivery_secrets")]);
+    if (this.calendarAuth && Date.now() - this.lastCalendarSyncAt >= this.config.calendarSyncIntervalMs!) {
+      this.lastCalendarSyncAt = Date.now();
+      try {
+        const calendarSync = await syncDirectCalendarAppointments({ db: this.db, getAccessToken: () => this.calendarAuth!.getAccessToken(), fallbackCalendarId: this.config.googleCalendarId });
+        this.calendarSyncHealthy = true;
+        setGauge("luna_calendar_sync_healthy", "Whether the latest direct Calendar sync succeeded.", {}, 1);
+        log("info", "direct_calendar_sync_completed", calendarSync);
+      } catch (error) {
+        this.calendarSyncHealthy = false;
+        setGauge("luna_calendar_sync_healthy", "Whether the latest direct Calendar sync succeeded.", {}, 0);
+        incrementCounter("luna_worker_failures_total", "Worker processing failures.", { queue: "calendar_sync" });
+        log("error", "direct_calendar_sync_failed", { error });
+      }
+    }
+    const [summarySchedule, otpPurge] = await Promise.all([
+      this.calendarSyncHealthy ? this.db.rpc("enqueue_daily_confirmation_summary", { p_summary_hour: this.config.dailySummaryHour ?? 8 }) : Promise.resolve({ data: null, error: null }),
+      this.db.rpc("purge_expired_otp_delivery_secrets"),
+    ]);
+    if (summarySchedule.error || otpPurge.error) {
+      log("error", "worker_housekeeping_rpc_failed", { summaryRpcStatus: summarySchedule.error?.code ?? null, otpRpcStatus: otpPurge.error?.code ?? null, migration: "202607270017_direct_calendar_appointments.sql" });
+      throw new Error("WORKER_HOUSEKEEPING_FAILED");
+    }
     if (this.stopped) return;
     const args = { batch_size: 10, worker_id: this.config.workerId!, lease_seconds: this.config.leaseSeconds! };
     const shouldRefreshHealth = Date.now() - this.lastQueueHealthAt >= 30_000;
@@ -125,6 +163,8 @@ export class MessagingWorker {
     try {
       if (row.event_type === "auth.otp_requested") await this.sendOtp(row);
       else if (["appointment.created", "appointment.rescheduled", "appointment.cancelled", "appointment.reminder"].includes(row.event_type)) await this.sendAppointment(row);
+      else if (row.event_type === "appointment.confirmation_requested") await this.sendAppointmentConfirmationRequest(row);
+      else if (row.event_type === "clinic.daily_confirmation_summary") await this.sendDailyConfirmationSummary(row);
       else if (row.event_type === "human_handoff.created") await this.sendHandoffNotification(row);
       else {
         await this.updateOrThrow("notification_outbox", row.id, { status: "sent", sent_at: new Date().toISOString(), last_error: "unsupported_event" }, row.lease_token);
@@ -139,6 +179,11 @@ export class MessagingWorker {
       if (message === "RECIPIENT_NOT_ALLOWED") {
         await this.updateOrThrow("notification_outbox", row.id, { status: "sent", sent_at: new Date().toISOString(), last_error: "recipient_not_allowed" }, row.lease_token);
         log("warn", "outbox_recipient_blocked", { correlationId: this.correlationId(row), eventType: row.event_type });
+        return;
+      }
+      if (message === "STALE_CONFIRMATION_REQUEST") {
+        await this.updateOrThrow("notification_outbox", row.id, { status: "sent", sent_at: new Date().toISOString(), last_error: "stale_schedule" }, row.lease_token);
+        log("info", "stale_confirmation_request_discarded", { correlationId: this.correlationId(row) });
         return;
       }
       if (message === "OTP_EXPIRED") {
@@ -176,6 +221,26 @@ export class MessagingWorker {
     const accessUrl = await this.createAccessUrl(patient.phone);
     await this.sendReply(patient.phone, appointmentInteractiveMessage(row.event_type, data.start_at, accessUrl, professional?.name));
   }
+  private async sendAppointmentConfirmationRequest(row: OutboxRow) {
+    const { data, error } = await this.db.from("appointments").select("start_at,status,patients(phone),professionals(name)").eq("id", row.aggregate_id).single();
+    const patient = Array.isArray(data?.patients) ? data.patients[0] : data?.patients;
+    const professional = Array.isArray(data?.professionals) ? data.professionals[0] : data?.professionals;
+    const expectedStart = typeof row.payload?.scheduled_start_at === "string" ? new Date(row.payload.scheduled_start_at) : null;
+    if (error || !data || !patient?.phone || !expectedStart || Number.isNaN(expectedStart.getTime()) || !["scheduled", "rescheduled"].includes(data.status) || expectedStart.getTime() !== new Date(data.start_at).getTime() || new Date(data.start_at) <= new Date()) throw new Error("STALE_CONFIRMATION_REQUEST");
+    if (!this.recipientAllowed(patient.phone)) throw new Error("RECIPIENT_NOT_ALLOWED");
+    const accessUrl = await this.createAccessUrl(patient.phone);
+    await this.sendReply(patient.phone, appointmentConfirmationRequestInteractiveMessage(data.start_at, accessUrl, professional?.name));
+    const update = await this.db.from("appointments").update({ attendance_confirmation_requested_at: new Date().toISOString() }).eq("id", row.aggregate_id).eq("start_at", data.start_at);
+    if (update.error) throw new Error("CONFIRMATION_REQUEST_STATE_FAILED");
+  }
+  private async sendDailyConfirmationSummary(row: OutboxRow) {
+    const summaryDate = typeof row.payload?.summary_date === "string" ? row.payload.summary_date : "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(summaryDate)) throw new Error("DAILY_SUMMARY_DATE_INVALID");
+    const { data, error } = await this.db.rpc("get_daily_confirmation_summary", { p_summary_date: summaryDate });
+    const summary = data as DailyConfirmationSummary | null;
+    if (error || !summary || !Number.isInteger(summary.total) || !Number.isInteger(summary.confirmed) || !Array.isArray(summary.unconfirmed)) throw new Error("DAILY_SUMMARY_LOOKUP_FAILED");
+    await this.evolution.sendText(this.config.handoffNotificationPhone, dailyConfirmationSummaryMessage(summary));
+  }
   private async sendHandoffNotification(row: OutboxRow) {
     const { data: handoff, error: handoffError } = await this.db.from("human_handoffs").select("phone,reason").eq("id", row.aggregate_id).single();
     if (handoffError || !handoff?.phone || !handoff?.reason) throw new Error("HANDOFF_NOT_FOUND");
@@ -204,7 +269,16 @@ export class MessagingWorker {
       let reply: string | InteractiveMessage;
       let handoff = false;
       let usedLlm = false;
-      if (["schedule", "reschedule", "cancel"].includes(intent)) reply = accessLinkInteractiveMessage(await this.createAccessUrl(row.phone), intent);
+      let processedAction: string | undefined;
+      if (intent === "confirm") {
+        const { data, error } = await this.db.rpc("confirm_upcoming_appointment_by_phone", { p_phone: row.phone });
+        const result = data as { status?: "confirmed" | "already_confirmed" | "not_found" | "ambiguous"; start_at?: string } | null;
+        if (error || !result?.status || !["confirmed", "already_confirmed", "not_found", "ambiguous"].includes(result.status)) throw new Error("APPOINTMENT_CONFIRMATION_FAILED");
+        const accessUrl = ["not_found", "ambiguous"].includes(result.status) ? await this.createAccessUrl(row.phone) : undefined;
+        reply = attendanceConfirmationReplyMessage(result.status, result.start_at, accessUrl);
+        processedAction = result.status === "confirmed" ? "appointment_confirmed" : result.status === "already_confirmed" ? "appointment_already_confirmed" : `confirmation_${result.status}`;
+      }
+      else if (["schedule", "reschedule", "cancel"].includes(intent)) reply = accessLinkInteractiveMessage(await this.createAccessUrl(row.phone), intent);
       else if (intent === "greeting") reply = greetingInteractiveMessage;
       else if (row.message_text === menuActions.questions) reply = questionsInteractiveMessage;
       else if (row.message_text === menuActions.insurance) reply = insurancePromptMessage;
@@ -232,9 +306,10 @@ export class MessagingWorker {
         if (error || !handoffId) throw new Error("HANDOFF_ENQUEUE_FAILED");
       }
       await this.sendReply(row.phone, reply);
-      await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: null, classified_intent: intent, processed_action: handoff ? "handoff" : ["schedule", "reschedule", "cancel"].includes(intent) ? "portal_link" : usedLlm ? "llm_answer" : "structured_answer" }, row.lease_token);
+      const action = processedAction ?? (handoff ? "handoff" : ["schedule", "reschedule", "cancel"].includes(intent) ? "portal_link" : usedLlm ? "llm_answer" : "structured_answer");
+      await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: null, classified_intent: intent, processed_action: action }, row.lease_token);
       incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "inbox", result: handoff ? "handoff" : "answered" });
-      log("info", "inbox_message_processed", { correlationId: row.id, intent, action: handoff ? "handoff" : ["schedule", "reschedule", "cancel"].includes(intent) ? "portal_link" : usedLlm ? "llm_answer" : "structured_answer", attempts: row.attempts, durationMs: Date.now() - startedAt });
+      log("info", "inbox_message_processed", { correlationId: row.id, intent, action, attempts: row.attempts, durationMs: Date.now() - startedAt });
     } catch (error) {
       incrementCounter("luna_worker_failures_total", "Worker processing failures.", { queue: "inbox" });
       log("error", "inbox_processing_failed", { correlationId: row.id, attempts: row.attempts, error });
@@ -246,7 +321,7 @@ export class MessagingWorker {
   }
   private async createAccessUrl(phone: string) { const token = opaqueToken(); const { error } = await this.db.from("access_tokens").insert({ phone, token_hash: tokenHash(token), origin: "whatsapp_link", expires_at: new Date(Date.now() + 30 * 60_000).toISOString() }); if (error) throw error; return `${this.config.portalBaseUrl}/acesso#token=${encodeURIComponent(token)}`; }
   private async loadKnowledge(): Promise<KnowledgeData> { const [plans, aliases, procedures, faqs] = await Promise.all([this.db.from("insurance_plans").select("id,name,instructions").eq("active", true), this.db.from("insurance_aliases").select("alias,insurance_plan_id").eq("active", true), this.db.from("procedures").select("name,description,online_booking").eq("active", true), this.db.from("faq_entries").select("question,answer").eq("active", true)]); if (plans.error || aliases.error || procedures.error || faqs.error) throw new Error("KNOWLEDGE_FAILED"); return { plans: plans.data ?? [], aliases: aliases.data ?? [], procedures: procedures.data ?? [], faqs: faqs.data ?? [] }; }
-  async run() { log("info", "worker_started", { workerId: this.config.workerId, pollMs: this.config.pollMs, healthPort: this.config.healthPort, concurrency: this.config.concurrency, leaseSeconds: this.config.leaseSeconds, recipientPolicy: this.config.recipientPolicy, allowedRecipientCount: this.config.allowedRecipients?.length ?? 0, interactiveMessages: this.config.interactiveMessages, openaiEnabled: Boolean(this.config.openaiApiKey) }); while (!this.stopped) { try { await this.tick(); } catch (error) { this.lastPoll = 0; incrementCounter("luna_worker_failures_total", "Worker processing failures.", { queue: "poll" }); log("error", "worker_poll_failed", { pollNumber: this.pollNumber, error }); } await new Promise((resolve) => setTimeout(resolve, this.config.pollMs)); } log("info", "worker_stopped", { pollsCompleted: this.pollNumber }); }
+  async run() { log("info", "worker_started", { workerId: this.config.workerId, pollMs: this.config.pollMs, healthPort: this.config.healthPort, concurrency: this.config.concurrency, leaseSeconds: this.config.leaseSeconds, recipientPolicy: this.config.recipientPolicy, allowedRecipientCount: this.config.allowedRecipients?.length ?? 0, interactiveMessages: this.config.interactiveMessages, dailySummaryHour: this.config.dailySummaryHour ?? 8, calendarSyncIntervalMs: this.config.calendarSyncIntervalMs, calendarSyncEnabled: Boolean(this.calendarAuth), openaiEnabled: Boolean(this.config.openaiApiKey) }); while (!this.stopped) { try { await this.tick(); } catch (error) { this.lastPoll = 0; incrementCounter("luna_worker_failures_total", "Worker processing failures.", { queue: "poll" }); log("error", "worker_poll_failed", { pollNumber: this.pollNumber, error }); } await new Promise((resolve) => setTimeout(resolve, this.config.pollMs)); } log("info", "worker_stopped", { pollsCompleted: this.pollNumber }); }
   stop() { if (!this.stopped) log("info", "worker_shutdown_requested", { pollsCompleted: this.pollNumber }); this.stopped = true; }
   healthy() { return !this.stopped && Date.now() - this.lastPoll < Math.max(this.config.pollMs * 5, 10_000); }
 }
