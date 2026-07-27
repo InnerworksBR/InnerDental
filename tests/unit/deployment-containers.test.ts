@@ -18,6 +18,8 @@ describe("separate production containers", () => {
     expect(dockerfile).toMatch(/^FROM node:24-slim@sha256:/m);
     expect(dockerfile).toContain("USER nextjs");
     expect(dockerfile).toContain("STOPSIGNAL SIGTERM");
+    expect(dockerfile).toContain("process.env.PORT||'3000'");
+    expect(compose).toContain('PORT: "3000"');
     expect(dockerignore).toMatch(/^\.env\*$/m);
     expect(dockerignore).toMatch(/^deploy$/m);
     expect(existsSync("Dockerfile")).toBe(false);

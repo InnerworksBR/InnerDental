@@ -30,6 +30,8 @@ Crie dois **App Services** a partir do mesmo repositório e da mesma revisão. E
 
 Não existe intencionalmente um arquivo chamado apenas `Dockerfile` na raiz. Assim, um serviço sem o caminho explícito falha no build em vez de iniciar acidentalmente a aplicação web no lugar do worker.
 
+No serviço web, configure `PORT=3000` em **Ambiente** e `3000` como **Proxy Port** em **Domínios**. Os dois valores precisam ser idênticos. Se o log mostrar `http://0.0.0.0:80`, existe um `PORT=80` sobrescrevendo a imagem; remova-o ou altere-o para `3000` antes de implantar novamente. O health check da imagem usa a porta efetiva de `process.env.PORT` para evitar loops de reinício durante diagnóstico.
+
 ## Build e configuração
 
 Antes do rollout, execute `pnpm config:verify` com a configuração de runtime injetada. O comando relata apenas nomes e categorias inválidas, nunca valores.

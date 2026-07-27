@@ -16,6 +16,7 @@ services:
       - ${WEB_ENV_FILE:-./web.env}
     environment:
       NODE_ENV: production
+      PORT: "3000"
       SERVICE_NAME: luna-web
       TRUST_PROXY: "true"
     ports:
@@ -31,7 +32,7 @@ services:
     cpus: ${WEB_CPU_LIMIT:-1.0}
     stop_grace_period: 20s
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "const port=process.env.PORT||'3000';fetch('http://127.0.0.1:'+port+'/api/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 20s
