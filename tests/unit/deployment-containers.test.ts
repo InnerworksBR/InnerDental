@@ -41,4 +41,14 @@ describe("separate production containers", () => {
     expect(dockerfile).not.toContain("src/app");
     expect(environment).toMatch(/^HANDOFF_NOTIFICATION_PHONE=/m);
   });
+
+  it("builds both images only after quality evidence is available in CI", () => {
+    const workflow = read(".github/workflows/ci.yml");
+
+    expect(workflow).toMatch(/e2e:\n\s+needs: quality/);
+    expect(workflow).toContain("docker build --file Dockerfile.web");
+    expect(workflow).toContain("docker build --file Dockerfile.worker");
+    expect(workflow.match(/name: quality-receipts/g)).toHaveLength(3);
+    expect(workflow).not.toContain('\\"org.opencontainers.image.revision\\"');
+  });
 });

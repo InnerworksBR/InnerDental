@@ -43,6 +43,7 @@ jobs:
           path: artifacts
 
   e2e:
+    needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -73,12 +74,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: quality-receipts
+          path: artifacts
       - run: docker build --file Dockerfile.web --build-arg APP_REVISION=${{ github.sha }} --tag luna-web:${{ github.sha }} .
       - run: test "$(docker image inspect luna-web:${{ github.sha }} --format '{{.Config.User}}')" = "nextjs"
-      - run: test "$(docker image inspect luna-web:${{ github.sha }} --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}')" = "${{ github.sha }}"
+      - run: test "$(docker image inspect luna-web:${{ github.sha }} --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "${{ github.sha }}"
       - run: docker build --file Dockerfile.worker --build-arg APP_REVISION=${{ github.sha }} --tag luna-worker:${{ github.sha }} .
       - run: test "$(docker image inspect luna-worker:${{ github.sha }} --format '{{.Config.User}}')" = "node"
-      - run: test "$(docker image inspect luna-worker:${{ github.sha }} --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}')" = "${{ github.sha }}"
+      - run: test "$(docker image inspect luna-worker:${{ github.sha }} --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "${{ github.sha }}"
       - run: |
           echo "revision=${{ github.sha }}" > release-images.txt
           echo "web=$(docker image inspect luna-web:${{ github.sha }} --format '{{.Id}}')" >> release-images.txt
