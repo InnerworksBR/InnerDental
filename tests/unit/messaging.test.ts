@@ -108,6 +108,23 @@ describe("messaging", () => {
     expect(rpc).toHaveBeenCalledWith("enqueue_human_handoff", expect.objectContaining({ p_phone: "5513999999999", p_reason: "Qual o preço do clareamento?" }));
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "handoff" }));
   });
+  it("answers a safe OpenAI response without notifying the doctor", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const rpc = vi.fn();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({ message: "Sim, a clínica possui estacionamento.", handoff_required: false }) }] }] }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    const knowledgeTable = () => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data: [], error: null }) }) });
+    const db = { rpc, from: (table: string) => {
+      if (["insurance_plans", "insurance_aliases", "procedures", "faq_entries"].includes(table)) return knowledgeTable();
+      if (table === "access_tokens") return { insert: vi.fn().mockResolvedValue({ error: null }) };
+      return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
+    } };
+    const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const worker = new MessagingWorker(db as never, evolution as never, { openaiApiKey: "test-key", openaiModel: "gpt-4o-mini", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000010", phone: "5513999999999", message_text: "A clínica tem estacionamento?", attempts: 1 });
+    expect(rpc).not.toHaveBeenCalled();
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("estacionamento"));
+    expect(updates).toContainEqual(expect.objectContaining({ processed_action: "llm_answer" }));
+  });
   it("delivers an idempotently queued handoff alert to the configured doctor number", async () => {
     const updates: Record<string, unknown>[] = [];
     const db = { from: (table: string) => {

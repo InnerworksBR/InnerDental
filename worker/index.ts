@@ -291,15 +291,15 @@ export class MessagingWorker {
           try {
             const generated = await generateClinicReply({ apiKey: this.config.openaiApiKey, model: this.config.openaiModel, message: row.message_text, knowledge });
             usedLlm = true;
-            handoff = generated.handoffRequired || intent === "human";
+            handoff = generated.handoffRequired;
             reply = handoff ? generated.text : knowledgeAnswerInteractiveMessage(generated.text);
           } catch (error) {
             log("warn", "openai_reply_failed", { correlationId: row.id, error });
             const answer = findStructuredAnswer(row.message_text, knowledge);
-            handoff = intent === "human" || !answer;
+            handoff = !answer;
             reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(`Claro! ${answer}`);
           }
-        } else { const answer = findStructuredAnswer(row.message_text, knowledge); handoff = intent === "human" || !answer; reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(`Claro! ${answer}`); }
+        } else { const answer = findStructuredAnswer(row.message_text, knowledge); handoff = !answer; reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(`Claro! ${answer}`); }
       }
       if (handoff) {
         const { data: handoffId, error } = await this.db.rpc("enqueue_human_handoff", { p_inbox_id: row.id, p_phone: row.phone, p_reason: handoffReason(row.message_text) });
