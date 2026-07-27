@@ -12,7 +12,7 @@
 
 - `src/lib/config/env.ts`, `src/lib/security/request-origin.ts`, `src/proxy.ts`
 - `worker/index.ts`, `.env.example`, `compose.yaml`
-- `Dockerfile`, `worker/Dockerfile`, `.github/workflows/ci.yml`
+- `Dockerfile.web`, `Dockerfile.worker`, `.github/workflows/ci.yml`
 - `scripts/verify-runtime-config.mjs`, `scripts/smoke-deployment.mjs`
 - `tests/unit/env.test.ts`, `tests/unit/request-origin.test.ts`, novos testes de deploy
 - `docs/runbooks/deploy-easypanel.md`, `docs/architecture/architecture.md`

@@ -6,7 +6,7 @@ Instrumentar antes do deploy, automatizar gates no CI, endurecer configuração,
 
 ## Arquivos previstos
 
-Logging/metrics/health, `Dockerfile`, compose de desenvolvimento, configuração EasyPanel, pipeline CI, runbooks, scripts seguros e testes E2E.
+Logging/metrics/health, `Dockerfile.web`, `Dockerfile.worker`, compose de desenvolvimento, configuração EasyPanel, pipeline CI, runbooks, scripts seguros e testes E2E.
 
 ## Sequência reversível
 

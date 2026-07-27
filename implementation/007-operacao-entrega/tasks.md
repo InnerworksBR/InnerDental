@@ -14,7 +14,7 @@
   - **Critério de conclusão:** build, lint, types, testes e scans bloqueiam regressões.
 - [x] **T-004:** Criar imagem Docker e configuração de homologação EasyPanel.
   - **Cobre:** RNF-003, RNF-005 | **Valida:** CA-705 | **Testes:** CT-704 container non-root/health/smoke
-  - **Arquivos esperados:** Dockerfile, deploy config, `.env.example` | **Dependências:** T-001, T-003 | **Risco:** high
+  - **Arquivos esperados:** `Dockerfile.web`, `Dockerfile.worker`, deploy config, `.env.example` | **Dependências:** T-001, T-003 | **Risco:** high
   - **Critério de conclusão:** imagem imutável roda sem root e recebe segredos em runtime.
 - [ ] **T-005:** Implementar e testar backup, restore e direitos LGPD.
   - **Cobre:** RNF-004, RNF-005 | **Valida:** CA-703 | **Testes:** CT-705 restore/anonimização

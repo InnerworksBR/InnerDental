@@ -4,7 +4,7 @@ services:
   worker:
     build:
       context: ..
-      dockerfile: worker/Dockerfile
+      dockerfile: Dockerfile.worker
       args:
         APP_REVISION: ${APP_REVISION:?configure APP_REVISION}
     image: ${WORKER_IMAGE_REPOSITORY:-luna-worker}:${IMAGE_TAG:?configure IMAGE_TAG}

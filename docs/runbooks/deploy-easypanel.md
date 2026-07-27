@@ -18,10 +18,17 @@ Na borda, configure `TRUST_PROXY=true` somente quando `PORTAL_BASE_URL` correspo
 
 | Serviço | Dockerfile | Porta | Health | Usuário | Persistência |
 |---|---|---:|---|---|---|
-| `luna-web` | `Dockerfile` | 3000 | `/api/health/live`; readiness `/api/health/ready` | `nextjs` (1001) | nenhuma |
-| `luna-worker` | `worker/Dockerfile` | 3001 interna | `/health` | `node` | nenhuma |
+| `luna-web` | `Dockerfile.web` | 3000 | `/api/health/live`; readiness `/api/health/ready` | `nextjs` (1001) | nenhuma |
+| `luna-worker` | `Dockerfile.worker` | 3001 interna | `/health` | `node` | nenhuma |
 
 O Supabase é externo. Não criar volume local para dados do produto. Expor somente o serviço web pelo proxy; health e métricas do worker ficam na rede privada.
+
+Crie dois **App Services** a partir do mesmo repositório e da mesma revisão. Em **Fonte > Build**, selecione `Dockerfile` e informe obrigatoriamente o caminho relativo:
+
+- web: `Dockerfile.web`, domínio configurado e proxy na porta `3000`;
+- worker: `Dockerfile.worker`, sem domínio, sem porta publicada e uma réplica inicial.
+
+Não existe intencionalmente um arquivo chamado apenas `Dockerfile` na raiz. Assim, um serviço sem o caminho explícito falha no build em vez de iniciar acidentalmente a aplicação web no lugar do worker.
 
 ## Build e configuração
 

@@ -2,6 +2,7 @@ services:
   web:
     build:
       context: .
+      dockerfile: Dockerfile.web
       args:
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-https://example.supabase.co}
         NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:-build-placeholder}
@@ -46,7 +47,7 @@ services:
   worker:
     build:
       context: .
-      dockerfile: worker/Dockerfile
+      dockerfile: Dockerfile.worker
     image: luna-worker:${IMAGE_TAG:-local}
     restart: unless-stopped
     init: true

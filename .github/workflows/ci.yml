@@ -73,10 +73,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --build-arg APP_REVISION=${{ github.sha }} --tag luna-web:${{ github.sha }} .
+      - run: docker build --file Dockerfile.web --build-arg APP_REVISION=${{ github.sha }} --tag luna-web:${{ github.sha }} .
       - run: test "$(docker image inspect luna-web:${{ github.sha }} --format '{{.Config.User}}')" = "nextjs"
       - run: test "$(docker image inspect luna-web:${{ github.sha }} --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}')" = "${{ github.sha }}"
-      - run: docker build --build-arg APP_REVISION=${{ github.sha }} --file worker/Dockerfile --tag luna-worker:${{ github.sha }} .
+      - run: docker build --file Dockerfile.worker --build-arg APP_REVISION=${{ github.sha }} --tag luna-worker:${{ github.sha }} .
       - run: test "$(docker image inspect luna-worker:${{ github.sha }} --format '{{.Config.User}}')" = "node"
       - run: test "$(docker image inspect luna-worker:${{ github.sha }} --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}')" = "${{ github.sha }}"
       - run: |

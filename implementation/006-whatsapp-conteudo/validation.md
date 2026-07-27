@@ -8,7 +8,7 @@
 - `pnpm run build` — aprovado; rotas `/api/webhooks/evolution` e `/api/auth/link` incluídas.
 - `node --check worker/index.ts` — aprovado no Node 24.
 - PostgreSQL 17 descartável — migrations 001–009 aplicadas; lembrete deduplicado (`1`, depois `0`), segundo claim concorrente vazio e lease vencido recuperado.
-- `docker build -f worker/Dockerfile -t luna-worker:local .` — aprovado.
+- `docker build -f Dockerfile.worker -t luna-worker:local .` — aprovado.
 - Imagem `luna-worker:local` — processo iniciou e permaneceu em execução com configuração fictícia, sem acessar serviços reais.
 - `pnpm typecheck` e `pnpm lint` — aprovados após a revisão de UX do WhatsApp.
 - `pnpm worker:check` — adapter/worker importado com sucesso.

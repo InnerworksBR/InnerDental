@@ -16,8 +16,8 @@ Versão 1.0 — preparação para homologação. Este runbook não autoriza aces
 
 | Serviço | Dockerfile | Compose | Porta | Health | Usuário |
 |---|---|---|---:|---|---|
-| web | `Dockerfile` | `deploy/web.compose.yaml` | `127.0.0.1:3000` por padrão | `/api/health/live` e `/api/health/ready` | `nextjs` 1001 |
-| worker | `worker/Dockerfile` | `deploy/worker.compose.yaml` | nenhuma pública | `/health` interno em 3001 | `node` |
+| web | `Dockerfile.web` | `deploy/web.compose.yaml` | `127.0.0.1:3000` por padrão | `/api/health/live` e `/api/health/ready` | `nextjs` 1001 |
+| worker | `Dockerfile.worker` | `deploy/worker.compose.yaml` | nenhuma pública | `/health` interno em 3001 | `node` |
 
 Os projetos Compose são independentes (`luna-web` e `luna-worker`). Ambos usam filesystem somente leitura, `/tmp` temporário, capabilities removidas, limite de processos/CPU/memória e rotação local de logs. O Supabase e a Evolution são externos; nenhum volume de dados da aplicação deve ser criado na VPS.
 

@@ -6,7 +6,14 @@ WORKDIR /app
 RUN npm install --global pnpm@11.6.0 --fetch-timeout=600000
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
-COPY --chown=node:node src ./src
+COPY --chown=node:node src/domain/knowledge ./src/domain/knowledge
+COPY --chown=node:node src/domain/messaging ./src/domain/messaging
+COPY --chown=node:node src/integrations/evolution ./src/integrations/evolution
+COPY --chown=node:node src/integrations/openai ./src/integrations/openai
+COPY --chown=node:node src/lib/messaging ./src/lib/messaging
+COPY --chown=node:node src/lib/observability ./src/lib/observability
+COPY --chown=node:node src/lib/phone ./src/lib/phone
+COPY --chown=node:node src/lib/reliability ./src/lib/reliability
 COPY --chown=node:node worker ./worker
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD node -e "fetch('http://127.0.0.1:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"

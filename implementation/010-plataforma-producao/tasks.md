@@ -20,7 +20,7 @@
   - **Cobre:** RF-024, RF-027
   - **Valida:** CA-024, CA-027
   - **Testes:** CT-1004
-  - **Arquivos esperados:** `compose.yaml`, `Dockerfile`, `worker/Dockerfile`
+  - **Arquivos esperados:** `compose.yaml`, `Dockerfile.web`, `Dockerfile.worker`
   - **Dependências:** T-1002
   - **Risco:** medium
   - **Critério de conclusão:** somente web é publicável, ambos os containers são não-root e healthchecks usam interfaces corretas.
