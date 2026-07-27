@@ -1,0 +1,26 @@
+# Tarefas
+
+- [x] **T-001:** Inicializar Next.js, TypeScript, Tailwind e ferramentas de qualidade.
+  - **Cobre:** RNF-003 | **Valida:** CA-101 | **Testes:** CT-101 build/lint/typecheck
+  - **Arquivos esperados:** `package.json`, `src/app/`, configs | **Dependências:** nenhuma | **Risco:** low
+  - **Critério de conclusão:** instalação e pipeline local passam em ambiente limpo.
+- [x] **T-002:** Criar configuração de ambiente validada e clientes Supabase browser/server.
+  - **Cobre:** RNF-003, RNF-004 | **Valida:** CA-104 | **Testes:** CT-102 configuração/segredos
+  - **Arquivos esperados:** `.env.example`, `src/lib/config/`, `src/lib/supabase/` | **Dependências:** T-001 | **Risco:** high
+  - **Critério de conclusão:** configuração inválida falha cedo e service role fica somente no servidor.
+- [x] **T-003:** Modelar e migrar entidades centrais, status, chaves e índices.
+  - **Cobre:** RNF-008 | **Valida:** CA-102 | **Testes:** CT-103 migrations/constraints
+  - **Arquivos esperados:** `supabase/migrations/` | **Dependências:** T-001 | **Risco:** high
+  - **Critério de conclusão:** banco vazio é reproduzível e rejeita referências/estados inválidos.
+- [x] **T-004:** Implementar auditoria e fila transacional de notificações pendentes.
+  - **Cobre:** RNF-007 | **Valida:** CA-102 | **Testes:** CT-104 auditoria/outbox
+  - **Arquivos esperados:** migrations, `src/lib/audit/` | **Dependências:** T-003 | **Risco:** medium
+  - **Critério de conclusão:** mutações geram registro e falha de mensagem pode ser reprocessada.
+- [x] **T-005:** Criar políticas RLS e testes por papel.
+  - **Cobre:** RNF-003, RNF-004 | **Valida:** CA-103 | **Testes:** CT-105 RLS
+  - **Arquivos esperados:** migrations, `tests/database/` | **Dependências:** T-003 | **Risco:** critical
+  - **Critério de conclusão:** matriz anônimo/paciente/serviço comprova menor privilégio.
+- [x] **T-006:** Criar seeds estruturados sem dados pessoais reais.
+  - **Cobre:** RF-013, RF-014 | **Valida:** CA-102 | **Testes:** CT-106 seed idempotente
+  - **Arquivos esperados:** `supabase/seed.sql` | **Dependências:** T-003 | **Risco:** low
+  - **Critério de conclusão:** seed repetível inclui profissional, regras, planos, aliases, procedimentos e FAQs de exemplo.

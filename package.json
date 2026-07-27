@@ -1,0 +1,51 @@
+{
+  "name": "luna-agenda",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.6.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "worker:check": "node -e \"import('./worker/index.ts')\"",
+    "security:scan": "node scripts/scan-secrets.mjs",
+    "config:verify": "node scripts/verify-runtime-config.mjs",
+    "smoke:deployment": "node scripts/smoke-deployment.mjs",
+    "observability:validate": "node scripts/validate-observability.mjs",
+    "migrations:check": "node scripts/check-migrations.mjs",
+    "release:manifest": "node scripts/create-release-manifest.mjs",
+    "test:load": "node scripts/load-availability.mjs",
+    "worker": "node --env-file-if-exists=.env --env-file-if-exists=.env.local worker/index.ts"
+  },
+  "dependencies": {
+    "@supabase/ssr": "0.12.3",
+    "@supabase/supabase-js": "2.110.7",
+    "next": "16.2.11",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-hook-form": "^7.81.0",
+    "server-only": "0.0.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "axe-core": "^4.12.1",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.2.11",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}

@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+body { margin:0; background:#E9E4DA; }
+a { color:#16655B; } a:hover { color:#0F4E46; }
+*::-webkit-scrollbar { display:none; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
+</style>
+</helmet>
+<div style="min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:26px 16px;background:linear-gradient(180deg,#EDE9E0,#E4DfD3)">
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" dark="{{ isDark }}" hint-size="390px,844px">
+<div style="height:100%;overflow-y:auto;background:{{ shellBg }};font-family:'Instrument Sans',system-ui,sans-serif;color:#1B2422;-webkit-font-smoothing:antialiased;padding-top:60px;box-sizing:border-box">
+
+<sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+<div style="min-height:100%;display:flex;flex-direction:column;padding:22px 22px 30px;position:relative;overflow:hidden;animation:fadeUp .4s ease both">
+  <div style="position:absolute;top:-100px;right:-100px;width:280px;height:280px;border-radius:50%;background:radial-gradient(circle at 40% 40%, #DBEDE5, rgba(219,237,229,0) 70%)"></div>
+  <div style="display:flex;align-items:center;gap:10px;position:relative">
+    <div style="width:34px;height:34px;border-radius:11px;background:#16655B;color:#FFFFFF;display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:18px">L</div>
+    <div style="font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:17px">Luna <span style="color:#16655B">Agenda</span></div>
+  </div>
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:16px;position:relative;padding:30px 0">
+    <div style="color:#16655B;font-size:12.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase">Odontologia sem fila</div>
+    <h1 style="margin:0;font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:40px;line-height:1.05;letter-spacing:-.01em">Seu sorriso, no seu tempo.</h1>
+    <p style="margin:0;color:#66716D;font-size:15.5px;line-height:1.6;max-width:30ch">Marque, remarque ou cancele consultas pelo celular. Sem senha, sem aplicativo, sem espera.</p>
+    <div style="display:grid;gap:12px;margin-top:8px">
+      <div style="display:flex;align-items:center;gap:10px;font-size:14.5px;color:#3D4744"><span style="width:8px;height:8px;border-radius:50%;background:#16655B"></span>Acesso por código no WhatsApp</div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:14.5px;color:#3D4744"><span style="width:8px;height:8px;border-radius:50%;background:#16655B"></span>Lembretes automáticos da consulta</div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:14.5px;color:#3D4744"><span style="width:8px;height:8px;border-radius:50%;background:#16655B"></span>Remarcação em dois toques</div>
+    </div>
+  </div>
+  <div style="display:grid;gap:10px;position:relative">
+    <button onClick="{{ goAcesso }}" style="min-height:54px;border:0;border-radius:16px;background:#16655B;color:#FFFFFF;font-family:inherit;font-weight:600;font-size:16px;cursor:pointer" style-hover="background:#0F4E46" style-active="transform:scale(.98)">Acessar minha agenda</button>
+    <button onClick="{{ goLogin }}" style="min-height:44px;border:0;background:transparent;color:#66716D;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer" style-hover="color:#16655B">Área interna da clínica</button>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isAcesso }}" hint-placeholder-val="{{ false }}">
+<div style="min-height:100%;display:flex;flex-direction:column;padding:16px 22px 30px;animation:fadeUp .35s ease both">
+  <button onClick="{{ goHome }}" style="align-self:flex-start;border:0;background:transparent;padding:6px 0;color:#16655B;font-family:inherit;font-weight:600;font-size:15px;cursor:pointer">‹ Voltar</button>
+  <div style="color:#16655B;font-size:12.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-top:22px">Acesso seguro</div>
+  <h1 style="margin:8px 0 10px;font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:30px;line-height:1.1">Gerencie sua consulta</h1>
+  <p style="margin:0;color:#66716D;font-size:15px;line-height:1.55">Informe seu telefone e receba um código de 6 dígitos no WhatsApp. Não usamos senha.</p>
+  <label style="display:block;font-weight:600;font-size:14px;margin:26px 0 8px">Telefone</label>
+  <input type="tel" inputMode="tel" placeholder="(11) 98765-4321" value="{{ phone }}" onChange="{{ setPhone }}" style="width:100%;min-height:52px;border:1.5px solid #D8D3CA;border-radius:14px;padding:0 16px;background:#FFFFFF;font-family:inherit;font-size:16px;color:#1B2422;outline:none" style-focus="border-color:#16655B" />
+  <sc-if value="{{ codeSent }}" hint-placeholder-val="{{ false }}">
+    <p style="margin:14px 0 0;background:#E3EFEA;color:#134E46;border-radius:12px;padding:12px 14px;font-size:14px;line-height:1.45" role="status">Código enviado! Se o número puder receber mensagens, ele chega em instantes.</p>
+    <label style="display:block;font-weight:600;font-size:14px;margin:20px 0 8px">Código de 6 dígitos</label>
+    <input inputMode="numeric" maxLength="6" placeholder="••••••" value="{{ code }}" onChange="{{ setCode }}" style="width:100%;min-height:56px;border:1.5px solid #D8D3CA;border-radius:14px;background:#FFFFFF;font-family:inherit;font-size:24px;font-weight:700;letter-spacing:12px;text-align:center;color:#1B2422;outline:none" style-focus="border-color:#16655B" />
+  </sc-if>
+  <div style="display:grid;gap:10px;margin-top:26px">
+    <sc-if value="{{ notCodeSent }}" hint-placeholder-val="{{ true }}">
+      <button onClick="{{ sendCode }}" style="min-height:54px;border:0;border-radius:16px;background:#16655B;color:#FFFFFF;font-family:inherit;font-weight:600;font-size:16px;cursor:pointer" style-hover="background:#0F4E46" style-active="transform:scale(.98)">Enviar código</button>
+    </sc-if>
+    <sc-if value="{{ codeSent }}" hint-placeholder-val="{{ false }}">
+      <button onClick="{{ verify }}" disabled="{{ codeIncomplete }}" style="min-height:54px;border:0;border-radius:16px;background:#16655B;color:#FFFFFF;font-family:inherit;font-weight:600;font-size:16px;cursor:pointer;opacity:{{ continueOpacity }}" style-hover="background:#0F4E46">Continuar</button>
+      <button onClick="{{ sendCode }}" style="min-height:44px;border:0;background:transparent;color:#16655B;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer">Reenviar código</button>
+    </sc-if>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isAgenda }}" hint-placeholder-val="{{ false }}">
+<div style="min-height:100%;display:flex;flex-direction:column;padding:18px 22px 26px;animation:fadeUp .35s ease both">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start">
+    <div>
+      <div style="color:#16655B;font-size:12.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase">Minha agenda</div>
+      <h1 style="margin:6px 0 0;font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:28px">Olá, Mariana</h1>
+    </div>
+    <button onClick="{{ goHome }}" style="border:0;background:transparent;padding:6px 0;color:#66716D;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer" style-hover="color:#B23B2A">Sair</button>
+  </div>
+  <sc-if value="{{ hasNotice }}" hint-placeholder-val="{{ false }}">
+    <p style="margin:16px 0 0;background:#E3EFEA;color:#134E46;border-radius:12px;padding:12px 14px;font-size:14px;font-weight:600" role="status">{{ notice }}</p>
+  </sc-if>
+  <div style="display:grid;gap:12px;margin-top:20px">
+    <sc-for list="{{ appts }}" as="item" hint-placeholder-count="2">
+      <article style="background:#FFFFFF;border:1px solid #E7E3DC;border-radius:18px;padding:18px;box-shadow:0 6px 18px rgba(23,33,31,.05);display:grid;gap:5px">
+        <div style="font-family:'Bricolage Grotesque',serif;font-weight:600;font-size:17px">{{ item.service }}</div>
+        <div style="color:#16655B;font-weight:600;font-size:14.5px">{{ item.when }}</div>
+        <div style="color:#66716D;font-size:14px">{{ item.prof }}</div>
+        <sc-if value="{{ item.notCanceling }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;gap:20px;margin-top:8px">
+            <button onClick="{{ item.resched }}" style="border:0;background:transparent;padding:4px 0;color:#16655B;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer">Remarcar</button>
+            <button onClick="{{ item.askCancel }}" style="border:0;background:transparent;padding:4px 0;color:#B23B2A;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer">Cancelar</button>
+          </div>
+        </sc-if>
+        <sc-if value="{{ item.canceling }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:16px;margin-top:8px;flex-wrap:wrap">
+            <span style="font-size:14px;font-weight:600;color:#B23B2A">Cancelar esta consulta?</span>
+            <button onClick="{{ item.confirmCancel }}" style="border:0;background:transparent;padding:4px 0;color:#B23B2A;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer;text-decoration:underline">Sim, cancelar</button>
+            <button onClick="{{ item.keep }}" style="border:0;background:transparent;padding:4px 0;color:#66716D;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer">Manter</button>
+          </div>
+        </sc-if>
+      </article>
+    </sc-for>
+  </div>
+  <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+    <div style="margin-top:20px;border:1.5px dashed #C9C3B8;border-radius:18px;padding:30px 22px;text-align:center;display:grid;gap:6px">
+      <div style="font-family:'Bricolage Grotesque',serif;font-weight:600;font-size:17px">Nenhuma consulta futura</div>
+      <p style="margin:0;color:#66716D;font-size:14px">Quando quiser, escolha um horário disponível.</p>
+    </div>
+  </sc-if>
+  <div style="flex:1"></div>
+  <button onClick="{{ startBooking }}" style="min-height:54px;border:0;border-radius:16px;background:#16655B;color:#FFFFFF;font-family:inherit;font-weight:600;font-size:16px;cursor:pointer;margin-top:24px" style-hover="background:#0F4E46" style-active="transform:scale(.98)">Marcar consulta</button>
+</div>
+</sc-if>
+
+<sc-if value="{{ isBooking }}" hint-placeholder-val="{{ false }}">
+<div style="min-height:100%;display:flex;flex-direction:column;padding:16px 22px 28px;animation:fadeUp .35s ease both">
+  <button onClick="{{ backToAgenda }}" style="align-self:flex-start;border:0;background:transparent;padding:6px 0;color:#16655B;font-family:inherit;font-weight:600;font-size:15px;cursor:pointer">‹ Voltar</button>
+  <div style="color:#16655B;font-size:12.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-top:18px">{{ bookingEyebrow }}</div>
+  <h1 style="margin:8px 0 0;font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:26px">Escolha um horário</h1>
+  <div style="font-weight:600;font-size:14px;margin:22px 0 10px">Profissional</div>
+  <div style="display:grid;gap:10px">
+    <sc-for list="{{ profs }}" as="p" hint-placeholder-count="3">
+      <button onClick="{{ p.pick }}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:16px;text-align:left;cursor:pointer;background:{{ p.bg }};border:1.5px solid {{ p.border }};font-family:inherit">
+        <span style="width:38px;height:38px;border-radius:50%;background:#DCEDE5;color:#134E46;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ p.initials }}</span>
+        <span style="display:grid;gap:1px;flex:1">
+          <span style="font-weight:600;font-size:15px;color:#1B2422">{{ p.name }}</span>
+          <span style="color:#66716D;font-size:13px">{{ p.spec }}</span>
+        </span>
+        <span style="width:18px;height:18px;border-radius:50%;border:2px solid {{ p.dotBorder }};background:{{ p.dot }};box-shadow:inset 0 0 0 3px #FFFFFF;flex-shrink:0"></span>
+      </button>
+    </sc-for>
+  </div>
+  <div style="font-weight:600;font-size:14px;margin:20px 0 10px">Data</div>
+  <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px">
+    <sc-for list="{{ days }}" as="d" hint-placeholder-count="6">
+      <button onClick="{{ d.pick }}" style="min-width:56px;padding:10px 0;border-radius:14px;display:grid;gap:2px;justify-items:center;cursor:pointer;background:{{ d.bg }};border:1.5px solid {{ d.border }};color:{{ d.color }};font-family:inherit;flex-shrink:0">
+        <span style="font-size:12px;font-weight:600;opacity:.75">{{ d.top }}</span>
+        <span style="font-size:17px;font-weight:700">{{ d.num }}</span>
+      </button>
+    </sc-for>
+  </div>
+  <div style="font-weight:600;font-size:14px;margin:18px 0 10px">Horários disponíveis</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+    <sc-for list="{{ slots }}" as="s" hint-placeholder-count="9">
+      <button onClick="{{ s.pick }}" disabled="{{ s.disabled }}" style="min-height:46px;border-radius:12px;cursor:pointer;background:{{ s.bg }};border:1.5px solid {{ s.border }};color:{{ s.color }};font-weight:{{ s.weight }};font-family:inherit;font-size:15px;opacity:{{ s.opacity }}">{{ s.label }}</button>
+    </sc-for>
+  </div>
+  <sc-if value="{{ hasTime }}" hint-placeholder-val="{{ false }}">
+    <p style="margin:18px 0 0;background:#E3EFEA;color:#134E46;border-radius:14px;padding:13px 15px;font-size:14px;font-weight:600;line-height:1.45">{{ summaryText }}</p>
+  </sc-if>
+  <button onClick="{{ confirmBooking }}" disabled="{{ confirmDisabled }}" style="min-height:54px;border:0;border-radius:16px;background:#16655B;color:#FFFFFF;font-family:inherit;font-weight:600;font-size:16px;cursor:pointer;margin-top:18px;opacity:{{ confirmOpacity }}" style-hover="background:#0F4E46">{{ confirmLabel }}</button>
+</div>
+</sc-if>
+
+<sc-if value="{{ isLogin }}" hint-placeholder-val="{{ false }}">
+<div style="min-height:100%;display:flex;flex-direction:column;padding:16px 22px 30px;animation:fadeUp .35s ease both;color:#E9F2EC">
+  <button onClick="{{ goHome }}" style="align-self:flex-start;border:0;background:transparent;padding:6px 0;color:#7FD8BD;font-family:inherit;font-weight:600;font-size:15px;cursor:pointer">‹ Voltar</button>
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center">
+    <div style="width:38px;height:38px;border-radius:12px;background:#7FD8BD;color:#0F1A16;display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',serif;font-weight:800;font-size:19px;margin-bottom:18px">L</div>
+    <div style="color:#7FD8BD;font-size:12.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase">Luna Ops · Área restrita</div>
+    <h1 style="margin:8px 0 10px;font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:32px;line-height:1.1;color:#E9F2EC">Console da clínica</h1>
+    <p style="margin:0;color:#93A69D;font-size:15px;line-height:1.55">Acesso exclusivo para a equipe autorizada.</p>
+    <label style="display:block;font-weight:600;font-size:14px;margin:28px 0 8px;color:#C7D6CE">E-mail</label>
+    <input type="email" autoComplete="email" placeholder="voce@clinicaluna.com.br" value="{{ email }}" onChange="{{ setEmail }}" style="width:100%;min-height:52px;border:1.5px solid #2C453A;border-radius:14px;padding:0 16px;background:#17251F;font-family:inherit;font-size:16px;color:#E9F2EC;outline:none" style-focus="border-color:#7FD8BD" />
+    <label style="display:block;font-weight:600;font-size:14px;margin:18px 0 8px;color:#C7D6CE">Senha</label>
+    <input type="password" autoComplete="current-password" placeholder="••••••••" value="{{ pass }}" onChange="{{ setPass }}" style="width:100%;min-height:52px;border:1.5px solid #2C453A;border-radius:14px;padding:0 16px;background:#17251F;font-family:inherit;font-size:16px;color:#E9F2EC;outline:none" style-focus="border-color:#7FD8BD" />
+    <button onClick="{{ doLogin }}" disabled="{{ loginDisabled }}" style="min-height:54px;border:0;border-radius:16px;background:#7FD8BD;color:#0F1A16;font-family:inherit;font-weight:700;font-size:16px;cursor:pointer;margin-top:26px;opacity:{{ loginOpacity }}" style-hover="background:#9AE4CD">Entrar no console</button>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isInterno }}" hint-placeholder-val="{{ false }}">
+<div style="min-height:100%;display:flex;flex-direction:column;animation:fadeUp .35s ease both;color:#E9F2EC">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 22px 0">
+    <div style="display:flex;align-items:center;gap:9px">
+      <div style="width:30px;height:30px;border-radius:10px;background:#7FD8BD;color:#0F1A16;display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',serif;font-weight:800;font-size:15px">L</div>
+      <div style="font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:15px;color:#E9F2EC">Luna <span style="color:#7FD8BD">Ops</span></div>
+    </div>
+    <button onClick="{{ goLogin }}" style="border:0;background:transparent;padding:6px 0;color:#93A69D;font-family:inherit;font-weight:600;font-size:13.5px;cursor:pointer" style-hover="color:#E2795B">Sair</button>
+  </div>
+  <div style="flex:1;padding:6px 22px 28px">
+
+  <sc-if value="{{ tabHoje }}" hint-placeholder-val="{{ true }}">
+    <h1 style="margin:14px 0 2px;font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:27px;color:#E9F2EC">Hoje</h1>
+    <div style="color:#93A69D;font-size:13.5px">{{ todayLong }}</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px">
+      <div style="background:#7FD8BD;color:#0F1A16;border-radius:16px;padding:14px 12px;display:grid;gap:2px"><span style="font-family:'Bricolage Grotesque',serif;font-weight:800;font-size:24px">{{ statConsultas }}</span><span style="font-size:11.5px;font-weight:600">consultas</span></div>
+      <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:14px 12px;display:grid;gap:2px"><span style="font-family:'Bricolage Grotesque',serif;font-weight:800;font-size:24px;color:#7FD8BD">{{ statOcup }}</span><span style="font-size:11.5px;color:#93A69D">ocupação</span></div>
+      <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:14px 12px;display:grid;gap:2px"><span style="font-family:'Bricolage Grotesque',serif;font-weight:800;font-size:24px;color:#E5B45A">{{ openCount }}</span><span style="font-size:11.5px;color:#93A69D">incidentes</span></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:14px">
+      <button onClick="{{ toggleBlockPanel }}" style="flex:1;min-height:44px;border:1.5px solid #2C453A;border-radius:12px;background:{{ blockBtnBg }};color:#7FD8BD;font-family:inherit;font-weight:700;font-size:13.5px;cursor:pointer" style-hover="background:#17251F">Bloquear dia</button>
+      <button onClick="{{ goIncForm }}" style="flex:1;min-height:44px;border:1.5px solid #2C453A;border-radius:12px;background:transparent;color:#E5B45A;font-family:inherit;font-weight:700;font-size:13.5px;cursor:pointer" style-hover="background:#17251F">Registrar incidente</button>
+    </div>
+    <sc-if value="{{ blockPanelOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:16px;margin-top:14px;display:grid;gap:12px">
+        <div style="color:#5F7268;font-size:11.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase">Bloquear quais dias?</div>
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <button onClick="{{ calPrev }}" disabled="{{ calPrevDisabled }}" style="width:32px;height:32px;border-radius:10px;border:1.5px solid #2C453A;background:transparent;color:#7FD8BD;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer;opacity:{{ calPrevOpacity }}">‹</button>
+          <span style="font-weight:700;font-size:14px;color:#E9F2EC;font-family:'Bricolage Grotesque',serif">{{ calMonthLabel }}</span>
+          <button onClick="{{ calNext }}" style="width:32px;height:32px;border-radius:10px;border:1.5px solid #2C453A;background:transparent;color:#7FD8BD;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer">›</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">
+          <sc-for list="{{ calHead }}" as="h" hint-placeholder-count="7">
+            <span style="text-align:center;font-size:11px;font-weight:700;color:#5F7268;padding:2px 0">{{ h.label }}</span>
+          </sc-for>
+          <sc-for list="{{ calDays }}" as="d" hint-placeholder-count="35">
+            <button onClick="{{ d.pick }}" disabled="{{ d.disabled }}" style="aspect-ratio:1;border-radius:10px;border:1.5px solid {{ d.border }};background:{{ d.bg }};color:{{ d.color }};font-family:inherit;font-weight:{{ d.weight }};font-size:13.5px;cursor:{{ d.cursor }}">{{ d.num }}</button>
+          </sc-for>
+        </div>
+        <sc-if value="{{ hasBlockSel }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size:12.5px;color:#93A69D">{{ blockSelSummary }}</div>
+        </sc-if>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <sc-for list="{{ blockProfChips }}" as="p" hint-placeholder-count="4">
+            <button onClick="{{ p.pick }}" style="border:1.5px solid {{ p.border }};border-radius:999px;background:{{ p.bg }};color:{{ p.color }};font-family:inherit;font-weight:600;font-size:12.5px;padding:7px 13px;cursor:pointer">{{ p.label }}</button>
+          </sc-for>
+        </div>
+        <div style="display:flex;gap:14px;align-items:center">
+          <button onClick="{{ confirmBlockDay }}" disabled="{{ blockConfirmDisabled }}" style="min-height:44px;border:0;border-radius:12px;background:#7FD8BD;color:#0F1A16;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer;padding:0 18px;opacity:{{ blockConfirmOpacity }}" style-hover="background:#9AE4CD">{{ blockConfirmLabel }}</button>
+          <button onClick="{{ toggleBlockPanel }}" style="border:0;background:transparent;color:#93A69D;font-family:inherit;font-weight:600;font-size:13.5px;cursor:pointer">Cancelar</button>
+        </div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ hasHojeNotice }}" hint-placeholder-val="{{ false }}">
+      <p style="margin:14px 0 0;background:#1E332B;color:#A9E3CD;border-radius:12px;padding:12px 14px;font-size:13.5px;font-weight:600" role="status">{{ hojeNotice }}</p>
+    </sc-if>
+    <div style="color:#5F7268;font-size:11.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;margin:22px 0 12px">Linha do tempo</div>
+    <div style="display:grid">
+      <sc-for list="{{ timeline }}" as="t" hint-placeholder-count="6">
+        <div style="display:grid;grid-template-columns:50px 1fr;gap:12px">
+          <div style="font-family:ui-monospace,monospace;font-size:12.5px;color:{{ t.timeColor }};padding-top:15px;text-align:right">{{ t.time }}</div>
+          <div style="border-left:2px solid #263B32;padding:0 0 12px 15px;position:relative">
+            <span style="position:absolute;left:-6px;top:18px;width:10px;height:10px;border-radius:50%;background:{{ t.dotColor }};box-shadow:0 0 0 3px #0F1A16"></span>
+            <sc-if value="{{ t.isAppt }}" hint-placeholder-val="{{ true }}">
+              <div style="background:#17251F;border:1px solid #263B32;border-radius:14px;padding:12px 14px;display:grid;gap:4px">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                  <span style="font-weight:600;font-size:14.5px;color:#E9F2EC">{{ t.patient }}</span>
+                  <span style="background:{{ t.chipBg }};color:{{ t.chipColor }};border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:700">{{ t.status }}</span>
+                </div>
+                <div style="color:#93A69D;font-size:13px">{{ t.prof }} · origem {{ t.source }}</div>
+              </div>
+            </sc-if>
+            <sc-if value="{{ t.isFree }}" hint-placeholder-val="{{ false }}">
+              <div style="border:1.5px dashed #2C453A;border-radius:14px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center">
+                <span style="color:#93A69D;font-size:13.5px">Horário livre</span>
+                <button onClick="{{ t.encaixar }}" style="border:0;background:transparent;color:#7FD8BD;font-family:inherit;font-weight:700;font-size:13.5px;cursor:pointer;padding:0">Encaixar</button>
+              </div>
+            </sc-if>
+            <sc-if value="{{ t.isBlock }}" hint-placeholder-val="{{ false }}">
+              <div style="background:#141F1A;border:1px solid #1E2E27;border-radius:14px;padding:12px 14px;color:#5F7268;font-size:13px">{{ t.label }}</div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ tabSemana }}" hint-placeholder-val="{{ false }}">
+    <h1 style="margin:14px 0 2px;font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:27px;color:#E9F2EC">Semana</h1>
+    <div style="color:#93A69D;font-size:13.5px">Ocupação e bloqueios por profissional</div>
+    <div style="display:flex;gap:8px;overflow-x:auto;padding:16px 0 4px">
+      <sc-for list="{{ semDays }}" as="d" hint-placeholder-count="7">
+        <button onClick="{{ d.pick }}" style="min-width:52px;padding:9px 0;border-radius:13px;display:grid;gap:2px;justify-items:center;cursor:pointer;background:{{ d.bg }};border:1.5px solid {{ d.border }};color:{{ d.color }};font-family:inherit;flex-shrink:0">
+          <span style="font-size:11.5px;font-weight:600;opacity:.8">{{ d.top }}</span>
+          <span style="font-size:16px;font-weight:700">{{ d.num }}</span>
+        </button>
+      </sc-for>
+    </div>
+    <div style="display:grid;gap:12px;margin-top:12px">
+      <sc-for list="{{ semProfs }}" as="p" hint-placeholder-count="3">
+        <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:16px;display:grid;gap:10px">
+          <div style="display:flex;align-items:center;gap:11px">
+            <span style="width:36px;height:36px;border-radius:50%;background:#1E332B;color:#7FD8BD;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ p.initials }}</span>
+            <span style="display:grid;gap:1px;flex:1">
+              <span style="font-weight:600;font-size:15px;color:#E9F2EC">{{ p.name }}</span>
+              <span style="color:#93A69D;font-size:12.5px">{{ p.spec }}</span>
+            </span>
+            <span style="color:#93A69D;font-size:12.5px">{{ p.consultas }} consultas</span>
+          </div>
+          <div style="height:8px;border-radius:999px;background:#263B32;overflow:hidden"><div style="height:100%;border-radius:999px;background:{{ p.barColor }};width:{{ p.pct }}"></div></div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="color:#93A69D;font-size:12.5px">{{ p.pctLabel }}</span>
+            <button onClick="{{ p.toggleBlock }}" style="border:0;background:transparent;color:{{ p.blockColor }};font-family:inherit;font-weight:700;font-size:13.5px;cursor:pointer;padding:0">{{ p.blockLabel }}</button>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ tabPacientes }}" hint-placeholder-val="{{ false }}">
+    <h1 style="margin:14px 0 2px;font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:27px;color:#E9F2EC">Pacientes</h1>
+    <div style="color:#93A69D;font-size:13.5px">{{ patCount }} pacientes ativos</div>
+    <input placeholder="Buscar por nome" value="{{ patQuery }}" onChange="{{ setPatQuery }}" style="width:100%;min-height:48px;border:1.5px solid #2C453A;border-radius:13px;padding:0 14px;background:#17251F;font-family:inherit;font-size:15px;color:#E9F2EC;outline:none;margin-top:16px" style-focus="border-color:#7FD8BD" />
+    <div style="display:grid;gap:10px;margin-top:14px">
+      <sc-for list="{{ patients }}" as="p" hint-placeholder-count="4">
+        <div style="background:#17251F;border:1px solid {{ p.border }};border-radius:16px;overflow:hidden">
+          <button onClick="{{ p.toggle }}" style="width:100%;display:flex;align-items:center;gap:11px;padding:14px 16px;border:0;background:transparent;text-align:left;cursor:pointer;font-family:inherit">
+            <span style="width:36px;height:36px;border-radius:50%;background:#1E332B;color:#7FD8BD;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ p.initials }}</span>
+            <span style="display:grid;gap:1px;flex:1">
+              <span style="font-weight:600;font-size:15px;color:#E9F2EC">{{ p.name }}</span>
+              <span style="color:#93A69D;font-size:12.5px">Próxima: {{ p.next }}</span>
+            </span>
+            <span style="background:{{ p.tagBg }};color:{{ p.tagColor }};border-radius:999px;padding:2px 9px;font-size:11px;font-weight:700;white-space:nowrap">{{ p.tag }}</span>
+          </button>
+          <sc-if value="{{ p.opened }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:0 16px 14px 63px;display:grid;gap:6px">
+              <div style="color:#93A69D;font-size:13px">{{ p.phone }}</div>
+              <div style="color:#93A69D;font-size:13px">{{ p.last }} · <span style="color:{{ p.faltasColor }}">{{ p.faltasLabel }}</span></div>
+              <div style="display:flex;gap:18px;margin-top:4px">
+                <button onClick="{{ p.remind }}" style="border:0;background:transparent;color:#7FD8BD;font-family:inherit;font-weight:700;font-size:13.5px;cursor:pointer;padding:0">{{ p.remindLabel }}</button>
+                <button onClick="{{ p.book }}" style="border:0;background:transparent;color:#93A69D;font-family:inherit;font-weight:700;font-size:13.5px;cursor:pointer;padding:0">Marcar consulta</button>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ tabMensagens }}" hint-placeholder-val="{{ false }}">
+    <h1 style="margin:14px 0 2px;font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:27px;color:#E9F2EC">Mensagens</h1>
+    <div style="color:#93A69D;font-size:13.5px">WhatsApp e notificações automáticas</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;background:#17251F;border:1px solid #263B32;border-radius:13px;padding:4px;margin-top:16px">
+      <button onClick="{{ msgPickIn }}" style="min-height:38px;border:0;border-radius:10px;background:{{ msgInBg }};color:{{ msgInColor }};font-family:inherit;font-weight:700;font-size:13.5px;cursor:pointer">Recebidas</button>
+      <button onClick="{{ msgPickOut }}" style="min-height:38px;border:0;border-radius:10px;background:{{ msgOutBg }};color:{{ msgOutColor }};font-family:inherit;font-weight:700;font-size:13.5px;cursor:pointer">Enviadas</button>
+    </div>
+    <sc-if value="{{ msgShowIn }}" hint-placeholder-val="{{ true }}">
+      <div style="display:grid;gap:10px;margin-top:14px">
+        <sc-for list="{{ msgIn }}" as="m" hint-placeholder-count="4">
+          <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:14px 16px;display:grid;gap:6px">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <span style="font-weight:600;font-size:14.5px;color:#E9F2EC">{{ m.phone }}</span>
+              <span style="color:#5F7268;font-size:12px">{{ m.when }}</span>
+            </div>
+            <div style="color:#93A69D;font-size:13.5px;line-height:1.45">“{{ m.text }}”</div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="background:#1E332B;color:#7FD8BD;border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:700">{{ m.intent }}</span>
+              <span style="color:#5F7268;font-size:12.5px">{{ m.action }}</span>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+    <sc-if value="{{ msgShowOut }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid;gap:10px;margin-top:14px">
+        <sc-for list="{{ msgOut }}" as="m" hint-placeholder-count="4">
+          <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:14px 16px;display:grid;gap:6px">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <span style="font-weight:600;font-size:14.5px;color:#E9F2EC">{{ m.event }}</span>
+              <span style="background:{{ m.chipBg }};color:{{ m.chipColor }};border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:700">{{ m.status }}</span>
+            </div>
+            <div style="color:#93A69D;font-size:13px">{{ m.meta }}</div>
+            <sc-if value="{{ m.failed }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ m.resend }}" style="justify-self:start;border:0;background:transparent;color:#E5B45A;font-family:inherit;font-weight:700;font-size:13.5px;cursor:pointer;padding:0">Reenviar agora</button>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+  </sc-if>
+
+  <sc-if value="{{ tabGestao }}" hint-placeholder-val="{{ false }}">
+    <h1 style="margin:14px 0 2px;font-family:'Bricolage Grotesque',serif;font-weight:700;font-size:27px;color:#E9F2EC">Gestão</h1>
+    <div style="color:#93A69D;font-size:13.5px">Últimos 30 dias</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px">
+      <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:13px 12px;display:grid;gap:2px"><span style="font-family:'Bricolage Grotesque',serif;font-weight:800;font-size:22px;color:#7FD8BD">92%</span><span style="font-size:11px;color:#93A69D">comparecimento</span></div>
+      <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:13px 12px;display:grid;gap:2px"><span style="font-family:'Bricolage Grotesque',serif;font-weight:800;font-size:22px;color:#E5B45A">4</span><span style="font-size:11px;color:#93A69D">cancelamentos</span></div>
+      <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:13px 12px;display:grid;gap:2px"><span style="font-family:'Bricolage Grotesque',serif;font-weight:800;font-size:22px;color:#E9F2EC">9</span><span style="font-size:11px;color:#93A69D">novos pacientes</span></div>
+    </div>
+    <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:16px;margin-top:14px">
+      <h2 style="margin:0 0 12px;font-family:'Bricolage Grotesque',serif;font-weight:600;font-size:16px;color:#E9F2EC">Profissionais</h2>
+      <div style="display:grid;gap:12px">
+        <sc-for list="{{ profToggles }}" as="p" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:11px">
+            <span style="display:grid;gap:1px;flex:1">
+              <span style="font-weight:600;font-size:14.5px;color:{{ p.nameColor }}">{{ p.name }}</span>
+              <span style="color:#5F7268;font-size:12.5px">{{ p.spec }} · {{ p.statusLabel }}</span>
+            </span>
+            <button onClick="{{ p.toggle }}" style="width:46px;height:26px;border-radius:999px;border:0;background:{{ p.tBg }};position:relative;cursor:pointer;flex-shrink:0">
+              <span style="position:absolute;top:3px;left:{{ p.knobLeft }};width:20px;height:20px;border-radius:50%;background:{{ p.knobBg }};transition:left .2s"></span>
+            </button>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:16px;margin-top:14px">
+      <h2 style="margin:0 0 12px;font-family:'Bricolage Grotesque',serif;font-weight:600;font-size:16px;color:#E9F2EC">Regras da agenda</h2>
+      <div style="display:grid;gap:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <span style="font-size:13.5px;color:#C7D6CE">Antecedência p/ cancelar</span>
+          <span style="display:flex;align-items:center;gap:10px">
+            <button onClick="{{ cancelMinus }}" style="width:30px;height:30px;border-radius:9px;border:1.5px solid #2C453A;background:transparent;color:#7FD8BD;font-family:inherit;font-weight:700;font-size:16px;cursor:pointer">−</button>
+            <span style="font-family:ui-monospace,monospace;font-weight:700;font-size:14px;color:#E9F2EC;min-width:32px;text-align:center">{{ cancelHours }}h</span>
+            <button onClick="{{ cancelPlus }}" style="width:30px;height:30px;border-radius:9px;border:1.5px solid #2C453A;background:transparent;color:#7FD8BD;font-family:inherit;font-weight:700;font-size:16px;cursor:pointer">+</button>
+          </span>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:13.5px;color:#C7D6CE">Horário de atendimento</span><span style="font-family:ui-monospace,monospace;font-size:13px;color:#93A69D">09:00 – 17:00</span></div>
+        <div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:13.5px;color:#C7D6CE">Lembrete automático</span><span style="font-family:ui-monospace,monospace;font-size:13px;color:#93A69D">24h antes</span></div>
+      </div>
+    </div>
+    <div style="background:#17251F;border:1px solid #263B32;border-radius:16px;padding:16px;margin-top:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <h2 style="margin:0;font-family:'Bricolage Grotesque',serif;font-weight:600;font-size:16px;color:#E9F2EC">Incidentes</h2>
+        <span style="background:#3A2E1B;color:#E5B45A;border-radius:999px;padding:2px 10px;font-size:11.5px;font-weight:700">{{ openCount }} aberto(s)</span>
+      </div>
+      <div style="display:grid;gap:12px">
+        <sc-for list="{{ incidents }}" as="inc" hint-placeholder-count="2">
+          <div style="display:grid;gap:4px;padding-bottom:12px;border-bottom:1px solid #1E2E27">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-weight:700;font-size:13.5px;font-family:ui-monospace,monospace;color:#C7D6CE">{{ inc.cat }}</span>
+              <span style="background:{{ inc.chipBg }};color:{{ inc.chipColor }};border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:700">{{ inc.status }}</span>
+            </div>
+            <p style="margin:0;color:#93A69D;font-size:13.5px;line-height:1.45">{{ inc.summary }}</p>
+            <sc-if value="{{ inc.hasCid }}" hint-placeholder-val="{{ false }}">
+              <div style="color:#5F7268;font-size:11.5px;font-family:ui-monospace,monospace">ID: {{ inc.cid }}</div>
+            </sc-if>
+            <sc-if value="{{ inc.open }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ inc.resolve }}" style="justify-self:start;border:0;background:transparent;padding:2px 0;color:#7FD8BD;font-family:inherit;font-weight:700;font-size:13.5px;cursor:pointer">Encerrar</button>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+      <sc-if value="{{ incFormHidden }}" hint-placeholder-val="{{ true }}">
+        <button onClick="{{ toggleIncForm }}" style="border:0;background:transparent;padding:8px 0 0;color:#7FD8BD;font-family:inherit;font-weight:700;font-size:13.5px;cursor:pointer">+ Registrar incidente</button>
+      </sc-if>
+      <sc-if value="{{ showIncForm }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;gap:10px;margin-top:12px">
+          <select value="{{ incCat }}" onChange="{{ setIncCat }}" style="min-height:46px;border:1.5px solid #2C453A;border-radius:12px;padding:0 12px;background:#0F1A16;font-family:inherit;font-size:14px;color:#E9F2EC">
+            <option value="validation">validation</option>
+            <option value="google_calendar">google_calendar</option>
+            <option value="supabase">supabase</option>
+            <option value="evolution">evolution</option>
+            <option value="worker">worker</option>
+            <option value="unknown">unknown</option>
+          </select>
+          <input placeholder="Descreva o que aconteceu" value="{{ incSummary }}" onChange="{{ setIncSummary }}" style="width:100%;min-height:46px;border:1.5px solid #2C453A;border-radius:12px;padding:0 12px;background:#0F1A16;font-family:inherit;font-size:14px;color:#E9F2EC;outline:none" style-focus="border-color:#7FD8BD" />
+          <div style="display:flex;gap:14px;align-items:center">
+            <button onClick="{{ addIncident }}" disabled="{{ incDisabled }}" style="min-height:44px;border:0;border-radius:12px;background:#7FD8BD;color:#0F1A16;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer;padding:0 18px;opacity:{{ incOpacity }}">Registrar</button>
+            <button onClick="{{ toggleIncForm }}" style="border:0;background:transparent;color:#93A69D;font-family:inherit;font-weight:600;font-size:13.5px;cursor:pointer">Cancelar</button>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  </div>
+  <div style="position:sticky;bottom:0;background:rgba(15,26,22,.93);backdrop-filter:blur(12px);border-top:1px solid #1E2E27;display:grid;grid-template-columns:repeat(5,1fr);padding:10px 10px 20px;gap:2px">
+    <sc-for list="{{ adminTabs }}" as="t" hint-placeholder-count="5">
+      <button onClick="{{ t.pick }}" style="border:0;border-radius:11px;background:{{ t.bg }};color:{{ t.color }};font-family:inherit;font-weight:{{ t.weight }};font-size:11.5px;padding:9px 2px;cursor:pointer;display:grid;gap:4px;justify-items:center">
+        <span style="width:5px;height:5px;border-radius:50%;background:{{ t.dot }}"></span>
+        {{ t.label }}
+      </button>
+    </sc-for>
+  </div>
+</div>
+</sc-if>
+
+</div>
+</x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:470,&quot;height&quot;:950},&quot;startScreen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;home&quot;,&quot;acesso&quot;,&quot;agenda&quot;,&quot;booking&quot;,&quot;internoLogin&quot;,&quot;interno&quot;],&quot;default&quot;:&quot;home&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Protótipo&quot;},&quot;emptyAgenda&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Protótipo&quot;}}">
+class Component extends DCLogic {
+  state = {
+    screen: null, phone: "", codeSent: false, code: "",
+    appts: null, notice: "", cancelingId: null, nextId: 100,
+    bMode: "new", reschedId: null, bProf: "p1", bDay: 0, bTime: null,
+    email: "", pass: "",
+    incidents: [
+      { id: 1, cat: "google_calendar", status: "open", summary: "Calendar não confirmou o bloqueio de 16/07 — ficou em reconciliação.", cid: "evt_8f21c4" },
+      { id: 2, cat: "evolution", status: "resolvido", summary: "Fila de mensagens WhatsApp normalizada após instabilidade.", cid: null }
+    ],
+    showIncForm: false, incCat: "unknown", incSummary: "",
+    adminTab: "hoje", hojeNotice: "", encaixados: {},
+    blockPanel: false, blockMonth: 0, blockSel: {}, blockProfSel: "all",
+    semDay: 0, blocked: {},
+    patQuery: "", patOpen: null, reminded: {},
+    msgTab: "in", resent: {},
+    profOff: {}, cancelHours: 24
+  };
+  PROFS = [
+    { id: "p1", name: "Dra. Camila Fontes", spec: "Clínica geral e profilaxia" },
+    { id: "p2", name: "Dr. Rafael Lima", spec: "Ortodontia" },
+    { id: "p3", name: "Dra. Beatriz Nunes", spec: "Endodontia" }
+  ];
+  TIMES = ["09:00", "09:40", "10:20", "11:00", "11:40", "14:00", "14:40", "15:20", "16:00"];
+  TIMELINE = [
+    { time: "09:00", kind: "appt", patient: "João Pereira", prof: "Dra. Camila Fontes", status: "confirmada", source: "whatsapp" },
+    { time: "09:40", kind: "free" },
+    { time: "10:20", kind: "appt", patient: "Ana Clara Souza", prof: "Dr. Rafael Lima", status: "remarcada", source: "portal" },
+    { time: "11:00", kind: "appt", patient: "Carlos Mendes", prof: "Dra. Beatriz Nunes", status: "confirmada", source: "portal" },
+    { time: "12:00", kind: "block", label: "Almoço — agenda bloqueada" },
+    { time: "14:00", kind: "appt", patient: "Fernanda Alves", prof: "Dra. Camila Fontes", status: "aguardando", source: "whatsapp" },
+    { time: "14:40", kind: "free" },
+    { time: "15:20", kind: "appt", patient: "Pedro Santana", prof: "Dr. Rafael Lima", status: "confirmada", source: "portal" }
+  ];
+  PATIENTS = [
+    { id: "u1", name: "João Pereira", phone: "(11) 99184-4321", tag: "em tratamento", next: "sex 24 jul · 14:30", last: "Últ. visita: 10 jul", faltas: 0 },
+    { id: "u2", name: "Ana Clara Souza", phone: "(11) 98650-8804", tag: "novo", next: "ter 21 jul · 10:20", last: "Primeira consulta", faltas: 0 },
+    { id: "u3", name: "Carlos Mendes", phone: "(21) 97412-1177", tag: "retorno", next: "sem consulta", last: "Últ. visita: 2 jun", faltas: 1 },
+    { id: "u4", name: "Fernanda Alves", phone: "(11) 99320-5566", tag: "em tratamento", next: "hoje · 14:00", last: "Últ. visita: 3 jul", faltas: 0 },
+    { id: "u5", name: "Pedro Santana", phone: "(11) 98111-2093", tag: "retorno", next: "hoje · 15:20", last: "Últ. visita: 28 mai", faltas: 2 }
+  ];
+  MSG_IN = [
+    { id: 1, phone: "(11) 99184-4321", when: "há 8 min", text: "Preciso remarcar minha consulta de sexta", intent: "remarcar", action: "link de remarcação enviado" },
+    { id: 2, phone: "(21) 97412-1177", when: "há 32 min", text: "Confirmo presença amanhã", intent: "confirmar", action: "confirmação registrada" },
+    { id: 3, phone: "(11) 98650-8804", when: "há 1 h", text: "Qual o endereço da clínica?", intent: "dúvida", action: "resposta automática enviada" },
+    { id: 4, phone: "(11) 99320-5566", when: "há 3 h", text: "Quero cancelar", intent: "cancelar", action: "aguardando confirmação do paciente" }
+  ];
+  MSG_OUT = [
+    { id: 1, event: "lembrete_24h", status: "enviada", meta: "João Pereira · há 12 min" },
+    { id: 2, event: "consulta_confirmada", status: "falhou", meta: "Pedro Santana · há 40 min · 3 tentativa(s)", failed: true },
+    { id: 3, event: "codigo_acesso", status: "enviada", meta: "Ana Clara Souza · há 1 h" },
+    { id: 4, event: "consulta_remarcada", status: "enviada", meta: "Ana Clara Souza · ontem" }
+  ];
+  defaultAppts() {
+    if (this.props.emptyAgenda) return [];
+    return [
+      { id: 1, service: "Limpeza e profilaxia", prof: "Dra. Camila Fontes", when: this.dayLabelFromOffset(7, "14:30") },
+      { id: 2, service: "Avaliação ortodôntica", prof: "Dr. Rafael Lima", when: this.dayLabelFromOffset(18, "09:40") }
+    ];
+  }
+  cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  initials(name) { return name.split(" ").filter((w) => w.length > 2).slice(-2).map((w) => w[0]).join("").toUpperCase() || name.slice(0, 2).toUpperCase(); }
+  dayLabelFromOffset(offset, time) {
+    const d = new Date(Date.now() + offset * 864e5);
+    return this.cap(new Intl.DateTimeFormat("pt-BR", { weekday: "long", day: "numeric", month: "long" }).format(d)) + " · " + time;
+  }
+  bookingDays() {
+    const out = [];
+    for (let i = 1; out.length < 6 && i < 12; i++) {
+      const d = new Date(Date.now() + i * 864e5);
+      if (d.getDay() === 0) continue;
+      out.push(d);
+    }
+    return out;
+  }
+  weekDays() {
+    const out = [];
+    for (let i = 0; out.length < 7 && i < 10; i++) {
+      const d = new Date(Date.now() + i * 864e5);
+      if (d.getDay() === 0) continue;
+      out.push(d);
+    }
+    return out;
+  }
+  renderVals() {
+    const st = this.state, set = (p) => this.setState(p);
+    const screen = st.screen ?? this.props.startScreen ?? "home";
+    const appts = st.appts ?? this.defaultAppts();
+    const go = (s) => () => set({ screen: s });
+    const days = this.bookingDays();
+    const prof = this.PROFS.find((p) => p.id === st.bProf) || this.PROFS[0];
+    const dayFull = this.cap(new Intl.DateTimeFormat("pt-BR", { weekday: "long", day: "numeric", month: "long" }).format(days[st.bDay] || days[0]));
+    const openCount = st.incidents.filter((i) => i.status === "open").length;
+    const isDark = screen === "interno" || screen === "internoLogin";
+    const MINT = "#7FD8BD", AMBER = "#E5B45A", RED = "#E2795B", FAINT = "#5F7268";
+    const statusChip = (s) => s === "confirmada" ? { bg: "#1E332B", c: MINT } : s === "remarcada" ? { bg: "#3A2E1B", c: AMBER } : s === "aguardando" ? { bg: "#242F2A", c: "#C7D6CE" } : { bg: "#3A241E", c: RED };
+    const q = st.patQuery.trim().toLowerCase();
+    return {
+      isDark, shellBg: isDark ? "#0F1A16" : "#F7F5F1",
+      isHome: screen === "home", isAcesso: screen === "acesso", isAgenda: screen === "agenda",
+      isBooking: screen === "booking", isLogin: screen === "internoLogin", isInterno: screen === "interno",
+      goHome: go("home"), goAcesso: go("acesso"), goLogin: go("internoLogin"),
+      phone: st.phone, setPhone: (e) => set({ phone: e.target.value }),
+      code: st.code, setCode: (e) => set({ code: e.target.value.replace(/\D/g, "").slice(0, 6) }),
+      codeSent: st.codeSent, notCodeSent: !st.codeSent,
+      sendCode: () => set({ codeSent: true, code: "" }),
+      codeIncomplete: st.code.length !== 6,
+      continueOpacity: st.code.length === 6 ? 1 : 0.5,
+      verify: () => set({ screen: "agenda", codeSent: false, code: "", notice: "" }),
+      notice: st.notice, hasNotice: !!st.notice,
+      appts: appts.map((a) => ({
+        ...a,
+        canceling: st.cancelingId === a.id, notCanceling: st.cancelingId !== a.id,
+        askCancel: () => set({ cancelingId: a.id }),
+        keep: () => set({ cancelingId: null }),
+        confirmCancel: () => set({ appts: appts.filter((x) => x.id !== a.id), cancelingId: null, notice: "Consulta cancelada." }),
+        resched: () => set({ screen: "booking", bMode: "resched", reschedId: a.id, bTime: null, bDay: 0, notice: "" })
+      })),
+      isEmpty: appts.length === 0,
+      startBooking: () => set({ screen: "booking", bMode: "new", reschedId: null, bTime: null, bDay: 0, bProf: "p1", notice: "" }),
+      backToAgenda: go("agenda"),
+      bookingEyebrow: st.bMode === "resched" ? "Remarcar consulta" : "Nova consulta",
+      profs: this.PROFS.map((p) => {
+        const sel = p.id === st.bProf;
+        return {
+          ...p, initials: this.initials(p.name),
+          pick: () => set({ bProf: p.id, bTime: null }),
+          bg: sel ? "#EDF5F1" : "#FFFFFF", border: sel ? "#16655B" : "#E7E3DC",
+          dotBorder: sel ? "#16655B" : "#C9C3B8", dot: sel ? "#16655B" : "#FFFFFF"
+        };
+      }),
+      days: days.map((d, i) => {
+        const sel = i === (st.bDay ?? 0);
+        return {
+          top: this.cap(new Intl.DateTimeFormat("pt-BR", { weekday: "short" }).format(d)).replace(".", ""),
+          num: String(d.getDate()),
+          pick: () => set({ bDay: i, bTime: null }),
+          bg: sel ? "#16655B" : "#FFFFFF", border: sel ? "#16655B" : "#E7E3DC", color: sel ? "#FFFFFF" : "#1B2422"
+        };
+      }),
+      slots: this.TIMES.map((t, i) => {
+        const taken = (i * 7 + (st.bDay ?? 0) * 3) % 5 === 2;
+        const sel = st.bTime === t;
+        return {
+          label: t, disabled: taken, pick: () => set({ bTime: t }),
+          bg: sel ? "#CDE8DD" : "#FFFFFF", border: sel ? "#16655B" : taken ? "#EFEBE4" : "#D8D3CA",
+          color: taken ? "#B5AFA4" : "#1B2422", weight: sel ? 700 : 500, opacity: taken ? 0.6 : 1
+        };
+      }),
+      hasTime: !!st.bTime,
+      summaryText: st.bTime ? `${prof.name} · ${dayFull} · ${st.bTime}` : "",
+      confirmDisabled: !st.bTime, confirmOpacity: st.bTime ? 1 : 0.5,
+      confirmLabel: st.bMode === "resched" ? "Confirmar remarcação" : "Confirmar consulta",
+      confirmBooking: () => {
+        if (!st.bTime) return;
+        const when = `${dayFull} · ${st.bTime}`;
+        if (st.bMode === "resched") {
+          set({ appts: appts.map((a) => a.id === st.reschedId ? { ...a, when, prof: prof.name } : a), screen: "agenda", notice: "Consulta remarcada com sucesso." });
+        } else {
+          set({ appts: [...appts, { id: st.nextId, service: "Consulta de avaliação", prof: prof.name, when }], nextId: st.nextId + 1, screen: "agenda", notice: "Consulta confirmada com sucesso." });
+        }
+      },
+      email: st.email, setEmail: (e) => set({ email: e.target.value }),
+      pass: st.pass, setPass: (e) => set({ pass: e.target.value }),
+      loginDisabled: !st.email || !st.pass, loginOpacity: st.email && st.pass ? 1 : 0.5,
+      doLogin: () => set({ screen: "interno", email: "", pass: "" }),
+      todayLong: this.cap(new Intl.DateTimeFormat("pt-BR", { dateStyle: "full" }).format(new Date())),
+      tabHoje: st.adminTab === "hoje", tabSemana: st.adminTab === "semana", tabPacientes: st.adminTab === "pacientes",
+      tabMensagens: st.adminTab === "mensagens", tabGestao: st.adminTab === "gestao",
+      adminTabs: [["hoje", "Hoje"], ["semana", "Semana"], ["pacientes", "Pacientes"], ["mensagens", "Mensagens"], ["gestao", "Gestão"]].map(([id, label]) => ({
+        label, pick: () => set({ adminTab: id }),
+        bg: st.adminTab === id ? "#1E332B" : "transparent",
+        color: st.adminTab === id ? MINT : "#93A69D",
+        weight: st.adminTab === id ? 700 : 600,
+        dot: st.adminTab === id ? MINT : "transparent"
+      })),
+      statConsultas: 5, statOcup: "78%", openCount,
+      blockPanelOpen: st.blockPanel,
+      blockBtnBg: st.blockPanel ? "#17251F" : "transparent",
+      toggleBlockPanel: () => set({ blockPanel: !st.blockPanel, hojeNotice: "" }),
+      ...(() => {
+        const now = new Date();
+        const base = new Date(now.getFullYear(), now.getMonth() + st.blockMonth, 1);
+        const todayKey = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
+        const daysInMonth = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+        const selKeys = Object.keys(st.blockSel).filter((k) => st.blockSel[k]);
+        const cells = [];
+        for (let i = 0; i < base.getDay(); i++) cells.push({ num: "", disabled: true, bg: "transparent", border: "transparent", color: "transparent", weight: 400, cursor: "default", pick: () => {} });
+        for (let day = 1; day <= daysInMonth; day++) {
+          const d = new Date(base.getFullYear(), base.getMonth(), day);
+          const key = String(d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + day);
+          const past = Number(key) < todayKey || d.getDay() === 0;
+          const sel = !!st.blockSel[key];
+          cells.push({
+            num: String(day), disabled: past,
+            pick: () => set({ blockSel: { ...st.blockSel, [key]: !sel } }),
+            bg: sel ? MINT : "transparent",
+            border: sel ? MINT : Number(key) === todayKey ? "#2C453A" : "transparent",
+            color: past ? "#3D4F45" : sel ? "#0F1A16" : "#C7D6CE",
+            weight: sel ? 800 : 500, cursor: past ? "default" : "pointer"
+          });
+        }
+        const fmt = new Intl.DateTimeFormat("pt-BR", { day: "numeric", month: "short" });
+        const selLabels = selKeys.sort().map((k) => { const n = Number(k); return fmt.format(new Date(Math.floor(n / 10000), Math.floor(n / 100) % 100 - 1, n % 100)); });
+        return {
+          calMonthLabel: this.cap(new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(base)),
+          calPrev: () => set({ blockMonth: Math.max(0, st.blockMonth - 1) }),
+          calNext: () => set({ blockMonth: st.blockMonth + 1 }),
+          calPrevDisabled: st.blockMonth === 0, calPrevOpacity: st.blockMonth === 0 ? 0.4 : 1,
+          calHead: ["D", "S", "T", "Q", "Q", "S", "S"].map((label) => ({ label })),
+          calDays: cells,
+          hasBlockSel: selKeys.length > 0,
+          blockSelSummary: selKeys.length === 1 ? `1 dia selecionado: ${selLabels[0]}` : `${selKeys.length} dias selecionados: ${selLabels.join(", ")}`,
+          blockConfirmDisabled: selKeys.length === 0,
+          blockConfirmOpacity: selKeys.length === 0 ? 0.5 : 1,
+          blockConfirmLabel: selKeys.length > 1 ? `Bloquear ${selKeys.length} dias` : "Confirmar bloqueio"
+        };
+      })(),
+      blockProfChips: [{ id: "all", name: "Todos" }, ...this.PROFS].map((p) => {
+        const sel = st.blockProfSel === p.id;
+        return {
+          label: p.name.split(" ").slice(0, 2).join(" "),
+          pick: () => set({ blockProfSel: p.id }),
+          bg: sel ? "#1E332B" : "#0F1A16", border: sel ? MINT : "#263B32", color: sel ? MINT : "#93A69D"
+        };
+      }),
+      confirmBlockDay: () => {
+        const selKeys = Object.keys(st.blockSel).filter((k) => st.blockSel[k]).sort();
+        if (selKeys.length === 0) return;
+        const fmt = new Intl.DateTimeFormat("pt-BR", { day: "numeric", month: "long" });
+        const labels = selKeys.map((k) => { const n = Number(k); return fmt.format(new Date(Math.floor(n / 10000), Math.floor(n / 100) % 100 - 1, n % 100)); });
+        const dias = labels.length === 1 ? labels[0] : labels.slice(0, -1).join(", ") + " e " + labels[labels.length - 1];
+        const pName = st.blockProfSel === "all" ? "todos os profissionais" : (this.PROFS.find((x) => x.id === st.blockProfSel) || {}).name;
+        set({ blockPanel: false, blockSel: {}, blockMonth: 0, hojeNotice: `Bloqueio de ${dias} enviado ao Google Calendar (${pName}). Pacientes afetados serão avisados.` });
+      },
+      goIncForm: () => set({ adminTab: "gestao", showIncForm: true }),
+      hojeNotice: st.hojeNotice, hasHojeNotice: !!st.hojeNotice,
+      timeline: this.TIMELINE.map((t) => {
+        const enc = st.encaixados[t.time];
+        const kind = enc ? "appt" : t.kind;
+        const status = enc ? "encaixe" : t.status;
+        const chip = enc ? { bg: "#3A2E1B", c: AMBER } : statusChip(t.status || "");
+        return {
+          time: t.time,
+          isAppt: kind === "appt", isFree: kind === "free", isBlock: kind === "block",
+          patient: enc ? "Reservado para encaixe" : t.patient, prof: enc ? "definir profissional" : t.prof,
+          source: enc ? "console" : t.source, status, label: t.label,
+          chipBg: chip.bg, chipColor: chip.c,
+          timeColor: kind === "appt" ? "#C7D6CE" : FAINT,
+          dotColor: kind === "appt" ? (status === "confirmada" ? MINT : status === "remarcada" || status === "encaixe" ? AMBER : "#93A69D") : kind === "free" ? "#2C453A" : "#1E2E27",
+          encaixar: () => set({ encaixados: { ...st.encaixados, [t.time]: true }, hojeNotice: `Horário de ${t.time} reservado para encaixe.` })
+        };
+      }),
+      semDays: this.weekDays().map((d, i) => {
+        const sel = i === st.semDay;
+        return {
+          top: this.cap(new Intl.DateTimeFormat("pt-BR", { weekday: "short" }).format(d)).replace(".", ""),
+          num: String(d.getDate()),
+          pick: () => set({ semDay: i }),
+          bg: sel ? MINT : "#17251F", border: sel ? MINT : "#263B32", color: sel ? "#0F1A16" : "#C7D6CE"
+        };
+      }),
+      semProfs: this.PROFS.map((p, pi) => {
+        const key = `${st.semDay}-${p.id}`;
+        const blocked = !!st.blocked[key];
+        const pct = blocked ? 0 : ((st.semDay * 37 + pi * 53) % 55) + 40;
+        return {
+          ...p, initials: this.initials(p.name),
+          consultas: blocked ? 0 : Math.round(pct / 100 * 8),
+          pct: (blocked ? 100 : pct) + "%",
+          barColor: blocked ? "#3A241E" : pct > 80 ? AMBER : MINT,
+          pctLabel: blocked ? "Dia bloqueado" : pct + "% ocupado",
+          blockLabel: blocked ? "Desbloquear" : "Bloquear dia",
+          blockColor: blocked ? AMBER : MINT,
+          toggleBlock: () => set({ blocked: { ...st.blocked, [key]: !blocked } })
+        };
+      }),
+      patCount: this.PATIENTS.length,
+      patQuery: st.patQuery, setPatQuery: (e) => set({ patQuery: e.target.value }),
+      patients: this.PATIENTS.filter((p) => !q || p.name.toLowerCase().includes(q)).map((p) => {
+        const opened = st.patOpen === p.id;
+        const tag = p.tag === "novo" ? { bg: "#3A2E1B", c: AMBER } : p.tag === "retorno" ? { bg: "#242F2A", c: "#C7D6CE" } : { bg: "#1E332B", c: MINT };
+        return {
+          ...p, initials: this.initials(p.name), opened,
+          border: opened ? "#2C453A" : "#263B32",
+          toggle: () => set({ patOpen: opened ? null : p.id }),
+          tagBg: tag.bg, tagColor: tag.c,
+          faltasLabel: p.faltas === 0 ? "nenhuma falta" : p.faltas + " falta(s)",
+          faltasColor: p.faltas === 0 ? "#93A69D" : AMBER,
+          remindLabel: st.reminded[p.id] ? "Lembrete enviado" : "Enviar lembrete",
+          remind: () => set({ reminded: { ...st.reminded, [p.id]: true } }),
+          book: () => set({ adminTab: "hoje", hojeNotice: `Escolha um horário livre na linha do tempo para encaixar ${p.name}.` })
+        };
+      }),
+      msgShowIn: st.msgTab === "in", msgShowOut: st.msgTab === "out",
+      msgPickIn: () => set({ msgTab: "in" }), msgPickOut: () => set({ msgTab: "out" }),
+      msgInBg: st.msgTab === "in" ? MINT : "transparent", msgInColor: st.msgTab === "in" ? "#0F1A16" : "#93A69D",
+      msgOutBg: st.msgTab === "out" ? MINT : "transparent", msgOutColor: st.msgTab === "out" ? "#0F1A16" : "#93A69D",
+      msgIn: this.MSG_IN,
+      msgOut: this.MSG_OUT.map((m) => {
+        const resent = st.resent[m.id];
+        const status = resent ? "reenviada" : m.status;
+        const chip = status === "enviada" ? { bg: "#1E332B", c: MINT } : status === "falhou" ? { bg: "#3A241E", c: RED } : { bg: "#3A2E1B", c: AMBER };
+        return { ...m, status, failed: m.failed && !resent, chipBg: chip.bg, chipColor: chip.c, resend: () => set({ resent: { ...st.resent, [m.id]: true } }) };
+      }),
+      profToggles: this.PROFS.map((p) => {
+        const off = !!st.profOff[p.id];
+        return {
+          ...p,
+          nameColor: off ? "#5F7268" : "#E9F2EC",
+          statusLabel: off ? "agenda pausada" : "recebendo agendamentos",
+          tBg: off ? "#263B32" : MINT, knobLeft: off ? "3px" : "23px", knobBg: off ? "#93A69D" : "#0F1A16",
+          toggle: () => set({ profOff: { ...st.profOff, [p.id]: !off } })
+        };
+      }),
+      cancelHours: st.cancelHours,
+      cancelMinus: () => set({ cancelHours: Math.max(12, st.cancelHours - 12) }),
+      cancelPlus: () => set({ cancelHours: Math.min(48, st.cancelHours + 12) }),
+      incidents: st.incidents.map((inc) => ({
+        ...inc,
+        open: inc.status === "open", hasCid: !!inc.cid,
+        chipBg: inc.status === "open" ? "#3A241E" : "#1E332B",
+        chipColor: inc.status === "open" ? RED : MINT,
+        status: inc.status === "open" ? "aberto" : "resolvido",
+        resolve: () => set({ incidents: st.incidents.map((x) => x.id === inc.id ? { ...x, status: "resolvido" } : x) })
+      })),
+      incFormHidden: !st.showIncForm, showIncForm: st.showIncForm,
+      toggleIncForm: () => set({ showIncForm: !st.showIncForm, incSummary: "" }),
+      incCat: st.incCat, setIncCat: (e) => set({ incCat: e.target.value }),
+      incSummary: st.incSummary, setIncSummary: (e) => set({ incSummary: e.target.value }),
+      incDisabled: !st.incSummary.trim(), incOpacity: st.incSummary.trim() ? 1 : 0.5,
+      addIncident: () => {
+        if (!st.incSummary.trim()) return;
+        set({ incidents: [{ id: Date.now(), cat: st.incCat, status: "open", summary: st.incSummary.trim(), cid: null }, ...st.incidents], showIncForm: false, incSummary: "" });
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

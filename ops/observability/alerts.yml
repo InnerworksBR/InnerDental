@@ -1,0 +1,47 @@
+groups:
+  - name: luna-availability
+    rules:
+      - alert: LunaWebUnavailable
+        expr: up{job="luna-web"} == 0
+        for: 2m
+        labels: { severity: critical, owner: application }
+        annotations:
+          impact: "Portal e APIs podem estar indisponíveis."
+          runbook: "docs/runbooks/incident-response.md"
+      - alert: LunaWorkerUnavailable
+        expr: up{job="luna-worker"} == 0
+        for: 2m
+        labels: { severity: critical, owner: application }
+        annotations:
+          impact: "OTP, confirmações e respostas WhatsApp podem atrasar."
+          runbook: "docs/runbooks/incident-response.md"
+      - alert: LunaHttpErrorsHigh
+        expr: sum(rate(luna_http_requests_total{status="5xx"}[5m])) / clamp_min(sum(rate(luna_http_requests_total[5m])), 1) > 0.05
+        for: 10m
+        labels: { severity: warning, owner: application }
+        annotations:
+          impact: "Mais de 5% das respostas web são 5xx."
+          runbook: "docs/runbooks/incident-response.md"
+  - name: luna-messaging
+    rules:
+      - alert: LunaQueueOldestItem
+        expr: luna_queue_oldest_pending_seconds > 300
+        for: 5m
+        labels: { severity: warning, owner: messaging }
+        annotations:
+          impact: "Há mensagem pendente há mais de cinco minutos."
+          runbook: "docs/runbooks/incident-response.md"
+      - alert: LunaQueueDeadLetters
+        expr: luna_queue_outbox_dead_letters + luna_queue_inbox_dead_letters > 0
+        for: 1m
+        labels: { severity: critical, owner: messaging }
+        annotations:
+          impact: "Mensagens saíram do retry automático e exigem investigação."
+          runbook: "docs/runbooks/incident-response.md"
+      - alert: LunaWorkerFailuresIncreasing
+        expr: sum(rate(luna_worker_failures_total[5m])) > 0
+        for: 5m
+        labels: { severity: warning, owner: messaging }
+        annotations:
+          impact: "Falhas do worker persistem por cinco minutos."
+          runbook: "docs/runbooks/incident-response.md"

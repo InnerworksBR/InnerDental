@@ -1,0 +1,50 @@
+# Tarefas
+
+- [x] **T-1101:** Criar migration aditiva de leases e dead-letter.
+  - **Cobre:** RF-029, RF-030
+  - **Valida:** CA-029, CA-030
+  - **Testes:** CT-1101, CT-1102
+  - **Arquivos esperados:** `supabase/migrations/20260723*_message_leases.sql`, testes de migration
+  - **Dependências:** nenhuma
+  - **Risco:** critical
+  - **Critério de conclusão:** schema preserva filas existentes e impede conclusão por lease inválido.
+- [x] **T-1102:** Implementar identidade e finalização protegida no worker.
+  - **Cobre:** RF-029, RF-032
+  - **Valida:** CA-029, CA-032
+  - **Testes:** CT-1103
+  - **Arquivos esperados:** `worker/index.ts`, testes do worker
+  - **Dependências:** T-1101
+  - **Risco:** critical
+  - **Critério de conclusão:** dois consumidores não concluem o mesmo lease e shutdown não reivindica trabalho novo.
+- [x] **T-1103:** Padronizar timeout e retry das integrações.
+  - **Cobre:** RF-031
+  - **Valida:** CA-031
+  - **Testes:** CT-1104
+  - **Arquivos esperados:** `src/integrations/evolution/client.ts`, `src/integrations/openai/chat.ts`, testes unitários
+  - **Dependências:** T-1102
+  - **Risco:** high
+  - **Critério de conclusão:** falhas temporárias e permanentes recebem tratamento limitado, testável e sem vazamento.
+- [x] **T-1104:** Tornar dead-letter visível no painel interno.
+  - **Cobre:** RF-030
+  - **Valida:** CA-030
+  - **Testes:** CT-1105
+  - **Arquivos esperados:** `src/lib/admin/repository.ts`, `src/components/admin-console.tsx`, testes administrativos
+  - **Dependências:** T-1101
+  - **Risco:** medium
+  - **Critério de conclusão:** operador identifica itens terminais e sua categoria segura sem acesso ao payload.
+- [x] **T-1105:** Expor métricas agregadas de saúde da fila.
+  - **Cobre:** RF-033
+  - **Valida:** CA-033
+  - **Testes:** CT-1106
+  - **Arquivos esperados:** `worker/index.ts`, `src/lib/observability/metrics.ts`, `tests/unit/observability.test.ts`
+  - **Dependências:** T-1102
+  - **Risco:** medium
+  - **Critério de conclusão:** backlog, idade, retry e dead-letter são mensuráveis sem PII ou cardinalidade livre.
+- [x] **T-1106:** Documentar rollout, compatibilidade e resposta operacional.
+  - **Cobre:** RF-029, RF-030, RF-032, RF-033
+  - **Valida:** CA-029, CA-030, CA-032, CA-033
+  - **Testes:** CT-1107
+  - **Arquivos esperados:** `worker/README.md`, `docs/runbooks/incident-response.md`, `implementation/011-resiliencia-mensageria/validation.md`
+  - **Dependências:** T-1103, T-1104, T-1105
+  - **Risco:** medium
+  - **Critério de conclusão:** sequência migration→worker, rollback e investigação possuem evidências reproduzíveis.

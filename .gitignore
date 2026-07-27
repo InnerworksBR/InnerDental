@@ -1,0 +1,29 @@
+# dependencies and build artifacts
+/node_modules
+/.next
+/out
+
+# coverage and tooling
+/coverage
+/test-results
+/playwright-report
+*.tsbuildinfo
+
+# local environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+
+# backup, restore and release receipts
+*.dump
+*.dump.age
+*.sha256
+*.manifest.json
+restore-report*.json
+release-manifest*.json
+/artifacts

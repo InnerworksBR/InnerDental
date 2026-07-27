@@ -1,0 +1,50 @@
+# Tarefas
+
+- [x] **T-1201:** Completar métricas de web, worker, filas e integrações.
+  - **Cobre:** RF-034, RF-036
+  - **Valida:** CA-034, CA-036
+  - **Testes:** CT-1201
+  - **Arquivos esperados:** `src/lib/observability/metrics.ts`, `src/proxy.ts`, `worker/index.ts`, testes unitários
+  - **Dependências:** nenhuma
+  - **Risco:** high
+  - **Critério de conclusão:** métricas necessárias existem com cardinalidade limitada e custo documentado.
+- [x] **T-1202:** Propagar correlação pelo fluxo assíncrono.
+  - **Cobre:** RF-037
+  - **Valida:** CA-037
+  - **Testes:** CT-1202
+  - **Arquivos esperados:** `src/lib/observability/logger.ts`, produtores de outbox, `worker/index.ts`, testes
+  - **Dependências:** T-1201
+  - **Risco:** high
+  - **Critério de conclusão:** logs da operação podem ser correlacionados sem transformar IDs em labels.
+- [x] **T-1203:** Versionar coleta privada e dashboards.
+  - **Cobre:** RF-034, RF-036
+  - **Valida:** CA-034, CA-036
+  - **Testes:** CT-1203
+  - **Arquivos esperados:** `ops/observability/prometheus.yml`, `ops/observability/dashboards/*.json`, `compose.yaml`
+  - **Dependências:** T-1201
+  - **Risco:** medium
+  - **Critério de conclusão:** perfil opcional coleta endpoints internos autenticados e carrega dashboards versionados.
+- [x] **T-1204:** Criar regras de alerta vinculadas a runbooks.
+  - **Cobre:** RF-035
+  - **Valida:** CA-035
+  - **Testes:** CT-1204
+  - **Arquivos esperados:** `ops/observability/alerts.yml`, `docs/runbooks/incident-response.md`
+  - **Dependências:** T-1201, T-1203
+  - **Risco:** high
+  - **Critério de conclusão:** cada risco crítico possui alerta sintaticamente válido, janela e resposta não destrutiva.
+- [x] **T-1205:** Fortalecer redaction e governança da telemetria.
+  - **Cobre:** RF-038
+  - **Valida:** CA-038
+  - **Testes:** CT-1205
+  - **Arquivos esperados:** `src/lib/observability/logger.ts`, `tests/unit/observability.test.ts`, `docs/operations/observability.md`
+  - **Dependências:** T-1202
+  - **Risco:** high
+  - **Critério de conclusão:** telemetria testada não contém PII/secrets e acesso/retenção são configuráveis e documentados.
+- [x] **T-1206:** Validar stack operacional e registrar evidências.
+  - **Cobre:** RF-034, RF-035, RF-036, RF-037, RF-038
+  - **Valida:** CA-034, CA-035, CA-036, CA-037, CA-038
+  - **Testes:** CT-1206
+  - **Arquivos esperados:** scripts de validação, `implementation/012-observabilidade-operacional/validation.md`
+  - **Dependências:** T-1203, T-1204, T-1205
+  - **Risco:** medium
+  - **Critério de conclusão:** scrape, dashboards, alertas, redaction e suíte do produto passam localmente.

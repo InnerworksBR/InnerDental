@@ -1,0 +1,30 @@
+# Tarefas
+
+- [x] **T-001:** Implementar álgebra de intervalos e gerador de slots.
+  - **Cobre:** RF-001 | **Valida:** CA-301 | **Testes:** CT-301 boundaries/timezone
+  - **Arquivos esperados:** `src/domain/availability/` | **Dependências:** 001 | **Risco:** high
+  - **Critério de conclusão:** períodos, almoço, passado e horizontes geram slots corretos.
+- [x] **T-002:** Aplicar regras e exceções por profissional.
+  - **Cobre:** RF-001 | **Valida:** CA-302 | **Testes:** CT-302 regras/exceções/all-day
+  - **Arquivos esperados:** availability services/repositories | **Dependências:** T-001 | **Risco:** high
+  - **Critério de conclusão:** dias inativos, férias e bloqueios produzem agenda determinística.
+- [x] **T-003:** Criar adapter Google Calendar com paginação, timeout e mapeamento de erros.
+  - **Cobre:** RF-002 | **Valida:** CA-304 | **Testes:** CT-303 contrato/paginação/recorrência/falha
+  - **Arquivos esperados:** `src/integrations/google-calendar/` | **Dependências:** 001/T-002 | **Risco:** critical
+  - **Critério de conclusão:** todos os eventos relevantes do intervalo são normalizados sem expor segredos.
+- [x] **T-004:** Agregar eventos e aplicar conflitos à disponibilidade.
+  - **Cobre:** RF-003 | **Valida:** CA-301, CA-302, CA-304 | **Testes:** CT-304 matriz de sobreposição
+  - **Arquivos esperados:** availability service | **Dependências:** T-001–T-003 | **Risco:** critical
+  - **Critério de conclusão:** nenhuma resposta positiva ocorre com conflito ou falha do Calendar.
+- [x] **T-005:** Implementar holds expirantes com exclusividade transacional.
+  - **Cobre:** RF-010 | **Valida:** CA-303 | **Testes:** CT-305 concorrência/expiração
+  - **Arquivos esperados:** migration, hold repository/service | **Dependências:** 001/T-003, T-001 | **Risco:** critical
+  - **Critério de conclusão:** corrida concorrente tem no máximo um vencedor e hold expirado não bloqueia.
+- [x] **T-006:** Publicar APIs de disponibilidade e holds com contratos Zod.
+  - **Cobre:** RF-001–RF-003, RF-010 | **Valida:** CA-303, CA-304 | **Testes:** CT-306 contrato HTTP/autorização
+  - **Arquivos esperados:** API route handlers | **Dependências:** T-004, T-005 | **Risco:** high
+  - **Critério de conclusão:** contratos estáveis retornam erros seguros e correlation ID.
+- [x] **T-007:** Implementar verificação fresca para confirmação e teste de desempenho.
+  - **Cobre:** RF-011 | **Valida:** CA-304, CA-305 | **Testes:** CT-307 corrida/p95
+  - **Arquivos esperados:** availability confirmation service, tests/load | **Dependências:** T-003–T-006 | **Risco:** critical
+  - **Critério de conclusão:** confirmação reconsulta Calendar e desempenho fica medido, não presumido.

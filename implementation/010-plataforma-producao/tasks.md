@@ -1,0 +1,42 @@
+# Tarefas
+
+- [x] **T-1001:** Implementar contrato de borda e proxy confiável.
+  - **Cobre:** RF-024
+  - **Valida:** CA-024
+  - **Testes:** CT-1001
+  - **Arquivos esperados:** `src/proxy.ts`, `src/lib/security/request-origin.ts`, `tests/unit/request-origin.test.ts`
+  - **Dependências:** nenhuma
+  - **Risco:** high
+  - **Critério de conclusão:** origem e headers encaminhados são aceitos somente nas condições configuradas e o worker não possui entrada pública.
+- [x] **T-1002:** Consolidar configuração fail-fast e inventário de secrets.
+  - **Cobre:** RF-025, RF-026
+  - **Valida:** CA-025, CA-026
+  - **Testes:** CT-1002, CT-1003
+  - **Arquivos esperados:** `src/lib/config/env.ts`, `worker/index.ts`, `.env.example`, `tests/unit/env.test.ts`
+  - **Dependências:** T-1001
+  - **Risco:** high
+  - **Critério de conclusão:** processos recusam configuração insegura em produção sem registrar valores sensíveis.
+- [x] **T-1003:** Endurecer topologia local e containers.
+  - **Cobre:** RF-024, RF-027
+  - **Valida:** CA-024, CA-027
+  - **Testes:** CT-1004
+  - **Arquivos esperados:** `compose.yaml`, `Dockerfile`, `worker/Dockerfile`
+  - **Dependências:** T-1002
+  - **Risco:** medium
+  - **Critério de conclusão:** somente web é publicável, ambos os containers são não-root e healthchecks usam interfaces corretas.
+- [x] **T-1004:** Produzir e verificar artefatos imutáveis na CI.
+  - **Cobre:** RF-027
+  - **Valida:** CA-027
+  - **Testes:** CT-1005
+  - **Arquivos esperados:** `.github/workflows/ci.yml`, `scripts/verify-runtime-config.mjs`
+  - **Dependências:** T-1003
+  - **Risco:** medium
+  - **Critério de conclusão:** CI associa web e worker à mesma revisão e registra verificações de imagem/digest sem publicar externamente.
+- [x] **T-1005:** Automatizar smoke e concluir runbook de rollout/rollback.
+  - **Cobre:** RF-028
+  - **Valida:** CA-028
+  - **Testes:** CT-1006
+  - **Arquivos esperados:** `scripts/smoke-deployment.mjs`, `docs/runbooks/deploy-easypanel.md`, `docs/architecture/architecture.md`
+  - **Dependências:** T-1004
+  - **Risco:** medium
+  - **Critério de conclusão:** promoção e rollback possuem checkpoints executáveis e evidência sem realizar deploy real.

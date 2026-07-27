@@ -1,0 +1,24 @@
+# Tarefas
+
+- [x] **T-001:** Definir adapter Evolution e contratos de mensagens/webhooks.
+  - **Cobre:** RF-009 | **Valida:** CA-604 | **Testes:** CT-601
+  - **Evidência:** adapter HTTP isolado, schema Zod, normalização e assinatura HMAC; testes de contrato aprovados.
+- [x] **T-002:** Implementar inbox/outbox idempotentes e processamento de retry no worker.
+  - **Cobre:** RF-009 | **Valida:** CA-603, CA-605 | **Testes:** CT-602
+  - **Evidência:** migration 009, claims com `SKIP LOCKED`, lease de 5 minutos, dedupe e backoff; PostgreSQL 17 descartável aprovado.
+- [x] **T-003:** Implementar geração e entrega de link e OTP pelo worker.
+  - **Cobre:** RF-015 | **Valida:** CA-601 | **Testes:** CT-603
+  - **Evidência:** link opaco consumível em `/api/auth/link`; OTP cifrado para entrega e persistido somente como hash para autenticação.
+- [x] **T-004:** Implementar confirmações, remarcações, cancelamentos e lembretes.
+  - **Cobre:** RF-009 | **Valida:** CA-605 | **Testes:** CT-604
+  - **Evidência:** templates sem dados clínicos, consumo da outbox e lembrete idempotente de 24 horas.
+- [x] **T-005:** Implementar consulta estruturada de FAQs, planos, aliases e procedimentos.
+  - **Cobre:** RF-013, RF-014 | **Valida:** CA-602 | **Testes:** CT-605
+  - **Evidência:** resolução somente sobre registros ativos carregados do banco; ausência de correspondência retorna `null`.
+- [x] **T-006:** Implementar classificação de intenção e fallback humano seguro.
+  - **Cobre:** RF-015 | **Valida:** CA-601, CA-602 | **Testes:** CT-606
+  - **Evidência:** classificador determinístico não executa agenda; baixa confiança cria `human_handoffs` e usa mensagem segura.
+- [ ] **T-007:** Empacotar, documentar e validar o worker ponta a ponta.
+  - **Cobre:** RF-009, RF-013–RF-015 | **Valida:** CA-601–CA-605 | **Testes:** CT-607
+  - **Evidência parcial:** imagem `luna-worker:local` construída e iniciada, health check e shutdown documentados; mensagens interativas, fallback textual, respostas de botão/lista, mídia não suportada, política de destinatários e handoff estruturado validados localmente.
+  - **Bloqueio:** teste sandbox ponta a ponta depende de URL, API key, instância e webhook configurados na Evolution API externa.

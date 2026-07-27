@@ -1,0 +1,99 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ci-placeholder
+      SUPABASE_SECRET_KEY: ci-placeholder
+      AUTH_SESSION_SECRET: ci-session-secret-at-least-32-characters
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.6.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: node scripts/scan-secrets.mjs
+      - run: pnpm audit --audit-level high --prod
+      - run: |
+          mkdir -p artifacts
+          node scripts/check-migrations.mjs --output artifacts/migration-receipt.json
+          node -e "require('node:fs').writeFileSync('artifacts/test-receipt.json', JSON.stringify({revision: process.env.GITHUB_SHA, status: 'passed', gates: ['lint','typecheck','test','build','secret-scan','audit']}) + '\n')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quality-receipts
+          path: artifacts
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ci-placeholder
+      SUPABASE_SECRET_KEY: ci-placeholder
+      AUTH_SESSION_SECRET: ci-session-secret-at-least-32-characters
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: quality-receipts
+          path: artifacts
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.6.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+
+  container:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg APP_REVISION=${{ github.sha }} --tag luna-web:${{ github.sha }} .
+      - run: test "$(docker image inspect luna-web:${{ github.sha }} --format '{{.Config.User}}')" = "nextjs"
+      - run: test "$(docker image inspect luna-web:${{ github.sha }} --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}')" = "${{ github.sha }}"
+      - run: docker build --build-arg APP_REVISION=${{ github.sha }} --file worker/Dockerfile --tag luna-worker:${{ github.sha }} .
+      - run: test "$(docker image inspect luna-worker:${{ github.sha }} --format '{{.Config.User}}')" = "node"
+      - run: test "$(docker image inspect luna-worker:${{ github.sha }} --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}')" = "${{ github.sha }}"
+      - run: |
+          echo "revision=${{ github.sha }}" > release-images.txt
+          echo "web=$(docker image inspect luna-web:${{ github.sha }} --format '{{.Id}}')" >> release-images.txt
+          echo "worker=$(docker image inspect luna-worker:${{ github.sha }} --format '{{.Id}}')" >> release-images.txt
+      - run: |
+          RELEASE_REVISION=${{ github.sha }} \
+          WEB_DIGEST=$(docker image inspect luna-web:${{ github.sha }} --format '{{.Id}}') \
+          WORKER_DIGEST=$(docker image inspect luna-worker:${{ github.sha }} --format '{{.Id}}') \
+          TEST_RECEIPT=artifacts/test-receipt.json \
+          MIGRATION_RECEIPT=artifacts/migration-receipt.json \
+          RELEASE_MANIFEST=release-manifest.json \
+          node scripts/create-release-manifest.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-image-receipt
+          path: |
+            release-images.txt
+            release-manifest.json

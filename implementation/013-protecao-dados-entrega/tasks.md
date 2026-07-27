@@ -1,0 +1,50 @@
+# Tarefas
+
+- [x] **T-1301:** Implementar backup criptografado, checksum e manifesto.
+  - **Cobre:** RF-039
+  - **Valida:** CA-039
+  - **Testes:** CT-1301
+  - **Arquivos esperados:** `scripts/backup-postgres.sh`, `.env.example`, `.gitignore`, testes de script
+  - **Dependências:** nenhuma
+  - **Risco:** critical
+  - **Critério de conclusão:** modo produção falha fechado e produz somente artefato criptografado verificável sem expor secrets.
+- [x] **T-1302:** Fortalecer restore isolado e relatório sanitizado.
+  - **Cobre:** RF-040
+  - **Valida:** CA-040
+  - **Testes:** CT-1302
+  - **Arquivos esperados:** `scripts/verify-restore.sh`, testes de guardas
+  - **Dependências:** T-1301
+  - **Risco:** critical
+  - **Critério de conclusão:** restore rejeita alvo não descartável e comprova schema/RLS sem exportar PII.
+- [x] **T-1303:** Criar preflight e recibo de migrations.
+  - **Cobre:** RF-041
+  - **Valida:** CA-041
+  - **Testes:** CT-1303
+  - **Arquivos esperados:** `scripts/check-migrations.mjs`, documentação de migration, testes
+  - **Dependências:** T-1302
+  - **Risco:** high
+  - **Critério de conclusão:** ordem, integridade, risco e backup são gates explícitos antes de qualquer aplicação externa.
+- [x] **T-1304:** Gerar manifesto rastreável de release.
+  - **Cobre:** RF-042
+  - **Valida:** CA-042
+  - **Testes:** CT-1304
+  - **Arquivos esperados:** `scripts/create-release-manifest.mjs`, `.github/workflows/ci.yml`, testes
+  - **Dependências:** T-1303
+  - **Risco:** medium
+  - **Critério de conclusão:** um manifesto sanitizado liga revisão, digests, checks, SBOM/checksum e migrations.
+- [x] **T-1305:** Consolidar rollback e evidências de recuperação.
+  - **Cobre:** RF-043
+  - **Valida:** CA-043
+  - **Testes:** CT-1305
+  - **Arquivos esperados:** `docs/runbooks/backup-restore-lgpd.md`, `docs/runbooks/deploy-easypanel.md`
+  - **Dependências:** T-1302, T-1304
+  - **Risco:** high
+  - **Critério de conclusão:** rollback preserva estado, define compatibilidade e exige smoke/evidência pós-ação.
+- [x] **T-1306:** Executar ensaio local e registrar validação.
+  - **Cobre:** RF-039, RF-040, RF-041, RF-042, RF-043
+  - **Valida:** CA-039, CA-040, CA-041, CA-042, CA-043
+  - **Testes:** CT-1306
+  - **Arquivos esperados:** `implementation/013-protecao-dados-entrega/validation.md`
+  - **Dependências:** T-1301, T-1302, T-1303, T-1304, T-1305
+  - **Risco:** high
+  - **Critério de conclusão:** ensaio descartável e validações locais possuem comandos, exit codes, tempos, limitações e riscos restantes.

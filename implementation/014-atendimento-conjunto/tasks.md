@@ -1,0 +1,34 @@
+# Tarefas
+
+- [x] **T-001:** Generalizar intervalos e disponibilidade para um ou dois slots consecutivos.
+  - **Cobre:** RF-044 | **Valida:** CA-044 | **Testes:** CT-1401 slots, pausa e conflito
+  - **Arquivos esperados:** `src/domain/availability/`, `src/lib/availability/` | **Dependências:** 003 | **Risco:** critical
+  - **Critério de conclusão:** somente inícios com toda a duração livre são aceitos.
+- [x] **T-002:** Criar migration de 15/30 minutos e proteção contra sobreposição.
+  - **Cobre:** RF-044 | **Valida:** CA-044 | **Testes:** CT-1402 constraints/RPC
+  - **Arquivos esperados:** `supabase/migrations/` | **Dependências:** T-001 | **Risco:** critical
+  - **Critério de conclusão:** holds e consultas sobrepostos são rejeitados atomicamente.
+- [x] **T-003:** Propagar duração por hold, criação e remarcação sem persistir o segundo nome.
+  - **Cobre:** RF-044, RNF-016 | **Valida:** CA-044, CA-046 | **Testes:** CT-1403 contratos/serviços
+  - **Arquivos esperados:** APIs e services de disponibilidade/consultas | **Dependências:** T-001, T-002 | **Risco:** critical
+  - **Critério de conclusão:** duração é preservada e payloads persistidos não contêm o acompanhante.
+- [x] **T-004:** Ajustar Calendar para título padronizado e remarcação que preserve nomes.
+  - **Cobre:** RF-046, RNF-016 | **Valida:** CA-046 | **Testes:** CT-1404 payload/PATCH
+  - **Arquivos esperados:** domínio de consultas e adapter Calendar | **Dependências:** T-003 | **Risco:** high
+  - **Critério de conclusão:** criação inclui os nomes e remarcação altera somente intervalo.
+- [x] **T-005:** Expor procedimentos indisponíveis para marcação online por contrato autenticado e seguro.
+  - **Cobre:** RF-045 | **Valida:** CA-045 | **Testes:** CT-1405 projeção/schema
+  - **Arquivos esperados:** repository e API de procedimentos | **Dependências:** 001, 002 | **Risco:** medium
+  - **Critério de conclusão:** todos e somente os registros com `online_booking = false` são devolvidos, independentemente de estarem ativos.
+- [x] **T-006:** Implementar pergunta, segundo nome, filtro de dois slots e aviso no portal.
+  - **Cobre:** RF-044, RF-045, RNF-016 | **Valida:** CA-044–CA-046 | **Testes:** CT-1406 E2E mobile/desktop
+  - **Arquivos esperados:** `src/app/agenda/`, estilos e E2E | **Dependências:** T-003–T-005 | **Risco:** high
+  - **Critério de conclusão:** confirmação é clara, acessível e impossível sem dados/duração válidos.
+- [x] **T-007:** Exibir `Nome Telefone` na linha do tempo interna autorizada.
+  - **Cobre:** RF-046 | **Valida:** CA-046 | **Testes:** CT-1407 projeção interna
+  - **Arquivos esperados:** repository/componentes admin | **Dependências:** 008, T-004 | **Risco:** high
+  - **Critério de conclusão:** agenda interna segue o padrão; outras listas permanecem mascaradas.
+- [x] **T-008:** Executar regressão e registrar rastreabilidade/limitações.
+  - **Cobre:** RF-044–RF-046, RNF-016 | **Valida:** CA-044–CA-046 | **Testes:** CT-1401–CT-1407
+  - **Arquivos esperados:** testes e `validation.md` | **Dependências:** T-001–T-007 | **Risco:** critical
+  - **Critério de conclusão:** suíte, tipos, lint, segurança, build e E2E passam; gates externos ficam explícitos.

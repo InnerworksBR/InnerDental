@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Luna Agenda — arquitetura atual e arquitetura recomendada",
+    "subtitle": "AS-IS local validado versus TO-BE de produção operável",
+    "output": "docs/architecture/luna-agenda-as-is-to-be.html",
+    "visual_preset": "blueprint",
+    "animation": "none",
+    "quality_profile": "showcase",
+    "viewBox": [1840, 1160],
+    "views": [
+      {
+        "id": "hoje",
+        "label": "01 · Como está hoje",
+        "focus": ["today-users", "today-web", "today-supabase", "today-worker", "today-evolution", "today-openai", "today-calendar"],
+        "note": "Implementação local validada: web transacional, banco gerenciado e worker assíncrono."
+      },
+      {
+        "id": "target-request",
+        "label": "02 · Jornada transacional",
+        "focus": ["target-users", "target-edge", "target-web", "target-supabase", "target-calendar"],
+        "note": "A borda protege a entrada; o web mantém as decisões de agenda e confirma ocupação no Calendar."
+      },
+      {
+        "id": "target-async",
+        "label": "03 · Jornada assíncrona",
+        "focus": ["target-web", "target-queue", "target-worker", "target-evolution", "target-openai"],
+        "note": "Outbox e inbox duráveis isolam a transação das falhas de WhatsApp e IA."
+      },
+      {
+        "id": "target-operations",
+        "label": "04 · Operação de produção",
+        "focus": ["target-edge", "target-web", "target-supabase", "target-queue", "target-worker", "target-ops"],
+        "note": "Segredos, métricas, logs, alertas, backup e rollout precisam formar um plano operacional explícito."
+      }
+    ]
+  },
+  "components": [
+    { "id": "today-users", "type": "external", "label": "Pacientes + equipe", "sublabel": "browser / mobile", "pos": [55, 255], "size": [150, 66] },
+    { "id": "today-web", "type": "frontend", "label": "Next.js único", "sublabel": "UI + BFF + APIs", "pos": [290, 255], "size": [160, 66], "tag": "local validado" },
+    { "id": "today-supabase", "type": "database", "label": "Supabase", "sublabel": "Auth + Postgres + RLS", "pos": [550, 255], "size": [170, 66], "tag": "estado + filas" },
+    { "id": "today-worker", "type": "backend", "label": "Worker TypeScript", "sublabel": "polling + retry", "pos": [820, 255], "size": [170, 66], "tag": "processo separado" },
+    { "id": "today-evolution", "type": "external", "label": "Evolution API", "sublabel": "WhatsApp + webhook", "pos": [1110, 145], "size": [155, 66] },
+    { "id": "today-openai", "type": "external", "label": "OpenAI Responses", "sublabel": "resposta assistida", "pos": [1110, 255], "size": [155, 66] },
+    { "id": "today-calendar", "type": "external", "label": "Google Calendar", "sublabel": "fonte de ocupação", "pos": [550, 390], "size": [170, 66] },
+
+    { "id": "target-users", "type": "external", "label": "Pacientes + equipe", "sublabel": "browser / mobile", "pos": [55, 760], "size": [150, 66] },
+    { "id": "target-edge", "type": "security", "label": "Borda HTTPS", "sublabel": "DNS + TLS + rate limit", "pos": [280, 760], "size": [165, 66], "tag": "exposição pública" },
+    { "id": "target-web", "type": "backend", "label": "Next.js Web / BFF", "sublabel": "portal + admin + API", "pos": [525, 760], "size": [175, 66], "tag": "stateless" },
+    { "id": "target-supabase", "type": "database", "label": "Supabase Core", "sublabel": "Auth + domínio + RLS", "pos": [790, 650], "size": [175, 66], "tag": "fonte transacional" },
+    { "id": "target-queue", "type": "messagebus", "label": "Outbox + Inbox", "sublabel": "Postgres / SKIP LOCKED", "pos": [790, 870], "size": [175, 66], "tag": "fila durável" },
+    { "id": "target-worker", "type": "backend", "label": "Worker escalável", "sublabel": "claim + retry + DLQ", "pos": [1067.5, 870], "size": [175, 66], "tag": "rede privada" },
+    { "id": "target-calendar", "type": "external", "label": "Google Calendar", "sublabel": "ocupação oficial", "pos": [790, 540], "size": [175, 66] },
+    { "id": "target-evolution", "type": "external", "label": "Evolution API", "sublabel": "WhatsApp", "pos": [1340, 760], "size": [160, 66] },
+    { "id": "target-openai", "type": "external", "label": "OpenAI Responses", "sublabel": "fallback controlado", "pos": [1340, 870], "size": [160, 66] },
+    { "id": "target-ops", "type": "cloud", "label": "Plano operacional", "sublabel": "secrets + observabilidade", "pos": [1060, 650], "size": [190, 66], "tag": "backup + CI/CD + alertas" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "AS-IS · implementação local comprovada", "wraps": ["today-users", "today-web", "today-supabase", "today-worker", "today-evolution", "today-openai", "today-calendar"], "pad": 35 },
+    { "kind": "region", "label": "TO-BE · produção recomendada", "wraps": ["target-users", "target-edge", "target-web", "target-supabase", "target-queue", "target-worker", "target-calendar", "target-evolution", "target-openai", "target-ops"], "pad": 35 },
+    { "kind": "security-group", "label": "workloads privados e dados gerenciados", "wraps": ["target-web", "target-supabase", "target-queue", "target-worker", "target-ops"], "pad": 22 }
+  ],
+  "connections": [
+    { "id": "today-users-web", "from": "today-users", "to": "today-web", "label": "HTTPS", "variant": "emphasis" },
+    { "id": "today-web-db", "from": "today-web", "to": "today-supabase", "label": "service role", "variant": "security" },
+    { "id": "today-db-worker", "from": "today-supabase", "to": "today-worker", "label": "poll / claim", "variant": "dashed" },
+    { "id": "today-worker-evolution", "from": "today-worker", "to": "today-evolution", "label": "sendText", "variant": "emphasis", "fromSide": "top", "toSide": "left", "route": "orthogonal-h" },
+    { "id": "today-worker-openai", "from": "today-worker", "to": "today-openai", "label": "Responses API", "variant": "dashed" },
+    { "id": "today-web-calendar", "from": "today-web", "to": "today-calendar", "label": "freebusy + eventos", "variant": "emphasis", "fromSide": "bottom", "toSide": "left", "route": "orthogonal-h" },
+    { "id": "today-evolution-webhook", "from": "today-evolution", "to": "today-web", "label": "webhook", "variant": "security", "fromSide": "top", "toSide": "top", "via": [[1188, 105], [370, 105]] },
+
+    { "id": "target-users-edge", "from": "target-users", "to": "target-edge", "label": "HTTPS", "variant": "emphasis" },
+    { "id": "target-edge-web", "from": "target-edge", "to": "target-web", "label": "proxy confiável", "variant": "security" },
+    { "id": "target-web-db", "from": "target-web", "to": "target-supabase", "label": "transações", "variant": "emphasis", "fromSide": "top", "toSide": "left", "route": "orthogonal-h" },
+    { "id": "target-web-queue", "from": "target-web", "to": "target-queue", "label": "commit + outbox", "variant": "dashed", "fromSide": "bottom", "toSide": "left", "route": "orthogonal-h" },
+    { "id": "target-queue-worker", "from": "target-queue", "to": "target-worker", "label": "claim idempotente", "variant": "emphasis" },
+    { "id": "target-web-calendar", "from": "target-web", "to": "target-calendar", "label": "freebusy + eventos", "variant": "emphasis", "fromSide": "top", "toSide": "left", "route": "orthogonal-h" },
+    { "id": "target-worker-evolution", "from": "target-worker", "to": "target-evolution", "label": "mensagens", "variant": "emphasis", "fromSide": "right", "toSide": "bottom", "route": "orthogonal-h" },
+    { "id": "target-worker-openai", "from": "target-worker", "to": "target-openai", "label": "resposta segura", "variant": "dashed" },
+    { "id": "target-evolution-webhook", "from": "target-evolution", "to": "target-web", "label": "webhook autenticado", "variant": "security", "fromSide": "top", "toSide": "top", "via": [[1420, 500], [612, 500]] },
+    { "id": "target-ops-web", "from": "target-ops", "to": "target-web", "label": "logs + métricas", "variant": "dashed", "fromSide": "top", "toSide": "top", "via": [[1155, 620], [612, 620]], "labelAt": [884, 620] },
+    { "id": "target-ops-worker", "from": "target-ops", "to": "target-worker", "label": "secrets + alertas", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [1155, 792] },
+    { "id": "target-ops-db", "from": "target-ops", "to": "target-supabase", "label": "backup / restore", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "O que já existe",
+      "items": [
+        "Next.js concentra portal do paciente, painel interno e APIs transacionais",
+        "Supabase mantém Auth, estado, RLS, auditoria, inbox e outbox",
+        "Worker separado entrega WhatsApp, lembretes e respostas assistidas"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Gaps observados",
+      "items": [
+        "Validação é local; integrações reais, domínio HTTPS e migrations remotas seguem pendentes",
+        "Métricas e logs existem, mas destino, dashboards, alertas e retenção não estão aprovados",
+        "Backup tem scripts e ensaio local, sem política operacional de produção definida"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Princípio do TO-BE",
+      "items": [
+        "Manter decisões de agenda no web e o Google Calendar como fonte de ocupação",
+        "Preservar outbox/inbox duráveis; worker não altera consultas nem disponibilidade",
+        "Completar a plataforma com borda, segredos, observabilidade, backup e rollout controlado"
+      ]
+    }
+  ]
+}

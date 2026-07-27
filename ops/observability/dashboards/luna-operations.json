@@ -1,0 +1,16 @@
+{
+  "title": "Luna Agenda — Operação",
+  "uid": "luna-operations",
+  "schemaVersion": 39,
+  "tags": ["luna", "homologation"],
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    { "id": 1, "type": "stat", "title": "Web disponível", "targets": [{ "expr": "up{job=\"luna-web\"}" }] },
+    { "id": 2, "type": "stat", "title": "Worker disponível", "targets": [{ "expr": "up{job=\"luna-worker\"}" }] },
+    { "id": 3, "type": "timeseries", "title": "Tráfego por resultado", "targets": [{ "expr": "sum by (status) (rate(luna_http_requests_total[5m]))" }] },
+    { "id": 4, "type": "timeseries", "title": "Latência p95", "targets": [{ "expr": "histogram_quantile(0.95, sum by (le, area) (rate(luna_http_request_duration_seconds_bucket[5m])))" }] },
+    { "id": 5, "type": "timeseries", "title": "Backlog de mensagens", "targets": [{ "expr": "luna_queue_outbox_backlog" }, { "expr": "luna_queue_inbox_backlog" }] },
+    { "id": 6, "type": "stat", "title": "Dead-letters", "targets": [{ "expr": "luna_queue_outbox_dead_letters + luna_queue_inbox_dead_letters" }] },
+    { "id": 7, "type": "timeseries", "title": "Falhas externas e retries", "targets": [{ "expr": "sum by (queue) (rate(luna_worker_failures_total[5m]))" }, { "expr": "sum by (queue) (rate(luna_worker_retries_total[5m]))" }] }
+  ]
+}

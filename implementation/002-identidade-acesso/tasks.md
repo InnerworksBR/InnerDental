@@ -1,0 +1,22 @@
+# Tarefas
+
+- [x] **T-001:** Implementar normalização e validação de telefone.
+  - **Cobre:** RF-007 | **Valida:** CA-201 | **Testes:** CT-201 vetores válidos/inválidos
+  - **Arquivos esperados:** `src/lib/phone/` | **Dependências:** 001/T-001 | **Risco:** medium
+  - **Critério de conclusão:** formatos aceitos convergem sem inventar números ambíguos.
+- [x] **T-002:** Implementar tokens opacos de acesso por link.
+  - **Cobre:** RF-008 | **Valida:** CA-201, CA-202 | **Testes:** CT-202 ciclo/replay/expiração
+  - **Arquivos esperados:** `src/lib/auth/access-token*`, route handlers | **Dependências:** T-001, 001/T-003 | **Risco:** high
+  - **Critério de conclusão:** somente hash persiste e uso/expiração são atômicos.
+- [x] **T-003:** Implementar solicitação e verificação de OTP.
+  - **Cobre:** RF-008, RNF-004 | **Valida:** CA-203 | **Testes:** CT-203 tentativas/rate limit/enumeração
+  - **Arquivos esperados:** `src/app/api/auth/request-code/`, `verify-code/` | **Dependências:** T-001, 001/T-004 | **Risco:** high
+  - **Critério de conclusão:** desafio limitado gera entrega assíncrona e verificação de uso único.
+- [x] **T-004:** Criar sessão segura e guard de paciente.
+  - **Cobre:** RF-007 | **Valida:** CA-204 | **Testes:** CT-204 cookies/autorização horizontal
+  - **Arquivos esperados:** `src/lib/auth/session*`, middleware | **Dependências:** T-002, T-003 | **Risco:** critical
+  - **Critério de conclusão:** identidade vem da sessão verificada, nunca de telefone informado na requisição.
+- [x] **T-005:** Auditar acessos e redigir dados sensíveis.
+  - **Cobre:** RNF-004 | **Valida:** CA-201 | **Testes:** CT-205 logs seguros
+  - **Arquivos esperados:** auth/audit/logging | **Dependências:** T-002–T-004 | **Risco:** high
+  - **Critério de conclusão:** eventos úteis existem sem token, OTP ou telefone completo.
