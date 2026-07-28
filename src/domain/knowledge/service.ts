@@ -28,20 +28,26 @@ export function triageInsurancePlan(message: string, data: Pick<KnowledgeData, "
   if (answer.length < 3) return { kind: "unsupported" };
   if (["dental", "odonto", "plano", "convenio", "saude"].includes(answer)) return { kind: "unsupported" };
 
-  const candidates = [
-    ...data.plans.map((plan) => ({ term: normalize(plan.name), plan })),
-    ...data.aliases.flatMap((alias) => {
-      const plan = data.plans.find((entry) => entry.id === alias.insurance_plan_id);
-      return plan ? [{ term: normalize(alias.alias), plan }] : [];
-    }),
-  ];
-  const exact = candidates.find((candidate) => candidate.term === answer);
-  if (exact) return { kind: "accepted", plan: exact.plan };
+  const canonicalCandidates = data.plans.map((plan) => ({ term: normalize(plan.name), plan }));
+  const canonicalExact = canonicalCandidates.find((candidate) => candidate.term === answer);
+  if (canonicalExact) return { kind: "accepted", plan: canonicalExact.plan };
 
-  const partialMatches = candidates.filter((candidate) => candidate.term.includes(answer) || answer.includes(candidate.term));
-  const matchingPlanIds = [...new Set(partialMatches.map((candidate) => candidate.plan.id))];
-  if (matchingPlanIds.length !== 1) return { kind: "unsupported" };
-  return { kind: "accepted", plan: partialMatches[0].plan };
+  const canonicalPartial = canonicalCandidates.filter((candidate) => candidate.term.includes(answer) || answer.includes(candidate.term));
+  const canonicalPlanIds = [...new Set(canonicalPartial.map((candidate) => candidate.plan.id))];
+  if (canonicalPlanIds.length === 1) return { kind: "accepted", plan: canonicalPartial[0].plan };
+  if (canonicalPlanIds.length > 1) return { kind: "unsupported" };
+
+  const aliasCandidates = data.aliases.flatMap((alias) => {
+    const plan = data.plans.find((entry) => entry.id === alias.insurance_plan_id);
+    return plan ? [{ term: normalize(alias.alias), plan }] : [];
+  });
+  const aliasExact = aliasCandidates.find((candidate) => candidate.term === answer);
+  if (aliasExact) return { kind: "accepted", plan: aliasExact.plan };
+
+  const aliasPartial = aliasCandidates.filter((candidate) => candidate.term.includes(answer) || answer.includes(candidate.term));
+  const aliasPlanIds = [...new Set(aliasPartial.map((candidate) => candidate.plan.id))];
+  if (aliasPlanIds.length !== 1) return { kind: "unsupported" };
+  return { kind: "accepted", plan: aliasPartial[0].plan };
 }
 
 export function findRequestedProcedure(message: string, data: Pick<KnowledgeData, "procedures">): KnowledgeData["procedures"][number] | null {

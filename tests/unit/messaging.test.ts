@@ -49,6 +49,21 @@ describe("messaging", () => {
     expect(triageInsurancePlan("Dental", knowledge)).toEqual({ kind: "unsupported" });
     expect(triageInsurancePlan("Plano inventado", knowledge)).toEqual({ kind: "unsupported" });
   });
+  it("prioritizes an active canonical plan over a conflicting alias and accepts common spellings", () => {
+    const knowledge = {
+      plans: [
+        { id: "bradesco", name: "Bradesco Dental", instructions: null },
+        { id: "unna", name: "Rede UNNA", instructions: null },
+        { id: "transmontano", name: "Transmontano", instructions: null },
+      ],
+      aliases: [
+        { alias: "Bradesco Dental", insurance_plan_id: "unna" },
+        { alias: "Tramontano", insurance_plan_id: "transmontano" },
+      ],
+    };
+    expect(triageInsurancePlan("Bradesco", knowledge)).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "bradesco" }) }));
+    expect(triageInsurancePlan("Tramontano", knowledge)).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "transmontano" }) }));
+  });
   it("rejects every plan name containing Caixa before consulting the active catalog", () => {
     expect(triageInsurancePlan("Caixa de Pecúlio", { plans: [{ id: "1", name: "Caixa de Pecúlio", instructions: null }], aliases: [] })).toEqual({ kind: "caixa" });
     expect(triageInsurancePlan("meu convênio é caixa saúde", { plans: [], aliases: [] })).toEqual({ kind: "caixa" });

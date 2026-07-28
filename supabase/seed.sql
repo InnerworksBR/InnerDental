@@ -34,6 +34,7 @@ values
   ('Amil Dental', true, null),
   ('Uniodonto', true, null),
   ('MetLife', true, null),
+  ('Transmontano', true, null),
   ('Caixa de Pecúlio de São Vicente', false, 'Não é mais atendido pela Dra. Tarcília.'),
   ('Caixa de Saúde de São Vicente', false, 'Não é mais atendido pela Dra. Tarcília.')
 on conflict (name) do update set active = excluded.active, instructions = excluded.instructions;
@@ -49,6 +50,12 @@ join (
     ('Rede UNNA', 'Previan')
 ) as alias(plan_name, alias) on alias.plan_name = plan.name
 on conflict (insurance_plan_id, alias) do nothing;
+
+insert into public.insurance_aliases (insurance_plan_id, alias)
+select id, 'Tramontano'
+from public.insurance_plans
+where name = 'Transmontano'
+on conflict (insurance_plan_id, alias) do update set active = true;
 
 insert into public.procedures (name, description, online_booking, active)
 values
