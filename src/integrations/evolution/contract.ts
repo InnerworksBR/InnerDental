@@ -68,14 +68,38 @@ function interactiveText(message: EvolutionWebhook["data"]["message"]) {
     ?? null;
 }
 
+function outboundText(message: EvolutionWebhook["data"]["message"]): string | null {
+  const raw = message as Record<string, unknown>;
+  const buttons = raw.buttonsMessage as { contentText?: unknown; text?: unknown } | undefined;
+  const interactive = raw.interactiveMessage as { body?: { text?: unknown } } | undefined;
+  return message.conversation
+    ?? message.extendedTextMessage?.text
+    ?? (typeof buttons?.contentText === "string" ? buttons.contentText : null)
+    ?? (typeof buttons?.text === "string" ? buttons.text : null)
+    ?? (typeof interactive?.body?.text === "string" ? interactive.body.text : null);
+}
+
+function remotePhone(payload: EvolutionWebhook): string | null {
+  const phone = payload.data.key.remoteJid.split("@")[0].replace(/\D/g, "");
+  return /^\d{12,15}$/.test(phone) ? phone : null;
+}
+
+export function normalizeFromMeActivity(payload: EvolutionWebhook) {
+  if (payload.event !== "messages.upsert" || payload.data.key.fromMe !== true) return null;
+  const phone = remotePhone(payload);
+  if (!phone) return null;
+  const text = outboundText(payload.data.message)?.trim().slice(0, 4000) || null;
+  return { externalId: payload.data.key.id, phone, text };
+}
+
 export function normalizeIncomingMessage(payload: EvolutionWebhook) {
   // Evolution publishes sent messages and status updates too. Only an explicit
   // inbound upsert may enter the bot queue; otherwise replies can echo forever.
   if (payload.event !== "messages.upsert" || payload.data.key.fromMe !== false) return null;
-  const phone = payload.data.key.remoteJid.split("@")[0].replace(/\D/g, "");
+  const phone = remotePhone(payload);
   const message = payload.data.message;
   const mediaFallback = unsupportedMediaTypes.some((type) => Boolean((message as Record<string, unknown>)[type])) ? menuActions.unsupportedMedia : "";
   const text = interactiveText(message) ?? message.conversation ?? message.extendedTextMessage?.text ?? mediaFallback;
-  if (!/^\d{12,15}$/.test(phone) || !text.trim() || isAutomatedReplyEcho(text)) return null;
+  if (!phone || !text.trim() || isAutomatedReplyEcho(text)) return null;
   return { externalId: payload.data.key.id, phone, text: text.trim().slice(0, 4000) };
 }

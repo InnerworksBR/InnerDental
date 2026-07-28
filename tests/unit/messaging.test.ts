@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyIntent, isExplicitHumanRequest } from "@/domain/messaging/intent";
+import { whatsappMessageFingerprint } from "@/domain/messaging/fingerprint";
 import { appointmentConfirmationRequestInteractiveMessage, appointmentMessage, dailyConfirmationSummaryMessage, isAutomatedReplyEcho, menuActions, otpMessage } from "@/domain/messaging/templates";
 import { findStructuredAnswer } from "@/domain/knowledge/service";
 import { encryptOtp, decryptOtp } from "@/lib/messaging/otp-cipher";
 import { signEvolutionPayload, verifyEvolutionApiKey, verifyEvolutionSignature } from "@/integrations/evolution/signature";
-import { evolutionWebhookSchema, normalizeIncomingMessage } from "@/integrations/evolution/contract";
+import { evolutionWebhookSchema, normalizeFromMeActivity, normalizeIncomingMessage } from "@/integrations/evolution/contract";
 import { EvolutionApiError, EvolutionClient } from "@/integrations/evolution/client";
 import { withBoundedRetry } from "@/lib/reliability/retry";
 import { MessagingWorker } from "../../worker/index";
@@ -15,9 +16,15 @@ describe("messaging", () => {
   it("recognizes explicit requests for human service without treating every unknown question as one", () => { expect(isExplicitHumanRequest("Quero falar com a doutora")).toBe(true); expect(isExplicitHumanRequest("Pode me transferir para um atendente?")).toBe(true); expect(isExplicitHumanRequest("A clínica tem estacionamento?")).toBe(false); });
   it("classifies textual and interactive attendance confirmations", () => { expect(classifyIntent("Confirmo")).toBe("confirm"); expect(classifyIntent("Vou comparecer")).toBe("confirm"); expect(classifyIntent(menuActions.appointmentConfirm)).toBe("confirm"); });
   it("resolves only active structured data supplied by the repository", () => { const answer = findStructuredAnswer("Vocês aceitam meu plano uni?", { plans: [{ id: "1", name: "Unimed", instructions: "Leve a carteirinha." }], aliases: [{ alias: "uni", insurance_plan_id: "1" }], procedures: [], faqs: [] }); expect(answer).toContain("Unimed"); expect(answer).toContain("carteirinha"); });
+  it("answers broad plan and child-age questions from the registered knowledge", () => {
+    const knowledge = { plans: [{ id: "1", name: "Unimed", instructions: null }, { id: "2", name: "Amil Dental", instructions: null }], aliases: [], procedures: [{ name: "Crianças", description: "Não são realizadas consultas em menores de 8 anos.", online_booking: false }], faqs: [] };
+    expect(findStructuredAnswer("Quais planos vcs atendem?", knowledge)).toMatch(/Unimed[\s\S]*Amil Dental/);
+    expect(findStructuredAnswer("Meu filho tem 6 anos, ele pode se consultar?", knowledge)).toContain("menores de 8 anos");
+  });
   it("returns null when knowledge has no safe match", () => { expect(findStructuredAnswer("Qual o preço secreto?", { plans: [], aliases: [], procedures: [], faqs: [] })).toBeNull(); });
   it("encrypts OTP at rest and rejects a wrong key", () => { const secret = "a".repeat(32), encrypted = encryptOtp("123456", secret); expect(encrypted).not.toContain("123456"); expect(decryptOtp(encrypted, secret)).toBe("123456"); expect(() => decryptOtp(encrypted, "b".repeat(32))).toThrow(); });
-  it("accepts only explicit inbound Evolution events", () => { const inbound = evolutionWebhookSchema.parse({ event: "messages.upsert", apikey: "evo-key", data: { key: { id: "evt-1", remoteJid: "5513999999999@s.whatsapp.net", fromMe: false }, message: { conversation: "Olá" } } }); expect(normalizeIncomingMessage(inbound)).toEqual({ externalId: "evt-1", phone: "5513999999999", text: "Olá" }); const outbound = evolutionWebhookSchema.parse({ event: "messages.upsert", apikey: "evo-key", data: { key: { id: "evt-2", remoteJid: "5513999999999@s.whatsapp.net", fromMe: true }, message: { conversation: "Resposta" } } }); expect(normalizeIncomingMessage(outbound)).toBeNull(); });
+  it("separates inbound messages from fromMe activity", () => { const inbound = evolutionWebhookSchema.parse({ event: "messages.upsert", apikey: "evo-key", data: { key: { id: "evt-1", remoteJid: "5513999999999@s.whatsapp.net", fromMe: false }, message: { conversation: "Olá" } } }); expect(normalizeIncomingMessage(inbound)).toEqual({ externalId: "evt-1", phone: "5513999999999", text: "Olá" }); expect(normalizeFromMeActivity(inbound)).toBeNull(); const outbound = evolutionWebhookSchema.parse({ event: "messages.upsert", apikey: "evo-key", data: { key: { id: "evt-2", remoteJid: "5513999999999@s.whatsapp.net", fromMe: true }, message: { conversation: "Resposta da doutora" } } }); expect(normalizeIncomingMessage(outbound)).toBeNull(); expect(normalizeFromMeActivity(outbound)).toEqual({ externalId: "evt-2", phone: "5513999999999", text: "Resposta da doutora" }); });
+  it("creates stable per-conversation fingerprints for bot echo detection", () => { expect(whatsappMessageFingerprint("5513999999999", "Olá  mundo\r\n")).toBe(whatsappMessageFingerprint("5513999999999", "Olá mundo\n")); expect(whatsappMessageFingerprint("5513999999999", "Olá")).not.toBe(whatsappMessageFingerprint("5513988887777", "Olá")); });
   it("normalizes button, list and native-flow replies to stable actions", () => {
     const base = { event: "messages.upsert", apikey: "evo-key", data: { key: { remoteJid: "5513999999999@s.whatsapp.net", fromMe: false } } };
     const button = evolutionWebhookSchema.parse({ ...base, data: { ...base.data, key: { ...base.data.key, id: "button-1" }, message: { buttonsResponseMessage: { selectedButtonId: menuActions.agenda, selectedDisplayText: "Agendar" } } } });
@@ -92,6 +99,17 @@ describe("messaging", () => {
     const worker = new MessagingWorker(db as never, evolution as never, { interactiveMessages: true, pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000007", phone: "5513999999999", message_text: "oi", attempts: 1 });
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("Como posso ajudar?"));
+  });
+  it("marks bot replies before sending so their fromMe echo does not pause the agent", async () => {
+    const markers: Record<string, unknown>[] = [];
+    const db = { from: (table: string) => table === "whatsapp_bot_outbound_markers"
+      ? { insert: vi.fn().mockImplementation(async (values: Record<string, unknown>) => { markers.push(values); return { error: null }; }) }
+      : { update: () => ({ eq: vi.fn().mockResolvedValue({ error: null }) }) } };
+    const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const worker = new MessagingWorker(db as never, evolution as never, { humanTakeoverPauseMinutes: 20, pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000012", phone: "5513999999999", message_text: "oi", attempts: 1 });
+    expect(markers).toContainEqual(expect.objectContaining({ phone: "5513999999999", message_fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) }));
+    expect(evolution.sendText).toHaveBeenCalledTimes(1);
   });
   it("persists a handoff whenever the structured OpenAI reply requires one", async () => {
     const updates: Record<string, unknown>[] = [];

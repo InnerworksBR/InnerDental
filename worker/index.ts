@@ -5,6 +5,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { EvolutionClient } from "../src/integrations/evolution/client.ts";
 import { decryptOtp } from "../src/lib/messaging/otp-cipher.ts";
 import { classifyIntent, isExplicitHumanRequest } from "../src/domain/messaging/intent.ts";
+import { whatsappMessageFingerprint } from "../src/domain/messaging/fingerprint.ts";
 import { handoffNotificationMessage, handoffReason } from "../src/domain/messaging/handoff.ts";
 import {
   accessLinkInteractiveMessage,
@@ -39,7 +40,7 @@ import { syncDirectCalendarAppointments } from "./calendar-sync.ts";
 type OutboxRow = { id: string; aggregate_id: string; event_type: string; attempts: number; lease_token?: string; payload?: { correlation_id?: unknown; scheduled_start_at?: unknown; summary_date?: unknown } };
 type InboxRow = { id: string; phone: string; message_text: string; attempts: number; lease_token?: string };
 type RecipientPolicy = "all" | "allowlist";
-type Config = { supabaseUrl: string; supabaseKey: string; evolutionBaseUrl: string; evolutionApiKey: string; evolutionInstance: string; otpSecret: string; portalBaseUrl: string; handoffNotificationPhone: string; dailySummaryHour?: number; googleCredentials?: GoogleServiceAccountCredentials; googleCalendarId?: string; calendarSyncIntervalMs?: number; openaiApiKey?: string; openaiModel: string; interactiveMessages?: boolean; recipientPolicy?: RecipientPolicy; pollMs: number; healthPort: number; workerId?: string; concurrency?: number; leaseSeconds?: number; allowedRecipients?: string[] };
+type Config = { supabaseUrl: string; supabaseKey: string; evolutionBaseUrl: string; evolutionApiKey: string; evolutionInstance: string; otpSecret: string; portalBaseUrl: string; handoffNotificationPhone: string; dailySummaryHour?: number; googleCredentials?: GoogleServiceAccountCredentials; googleCalendarId?: string; calendarSyncIntervalMs?: number; openaiApiKey?: string; openaiModel: string; interactiveMessages?: boolean; recipientPolicy?: RecipientPolicy; pollMs: number; healthPort: number; workerId?: string; concurrency?: number; leaseSeconds?: number; allowedRecipients?: string[]; humanTakeoverPauseMinutes?: number };
 
 function required(name: string) { const value = process.env[name]?.trim(); if (!value) throw new Error(`Missing ${name}`); return value; }
 function booleanSetting(name: string, fallback = false) { const value = process.env[name]?.trim().toLowerCase(); if (!value) return fallback; if (value === "true") return true; if (value === "false") return false; throw new Error(`${name}_INVALID`); }
@@ -66,7 +67,7 @@ export function loadWorkerConfig(): Config {
   if (!Number.isFinite(pollMs) || pollMs < 250 || !Number.isInteger(healthPort) || healthPort < 1 || healthPort > 65535 || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 20 || !Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) throw new Error("WORKER_INTERVAL_OR_PORT_INVALID");
   if (!Number.isInteger(dailySummaryHour) || dailySummaryHour < 0 || dailySummaryHour > 23) throw new Error("WORKER_DAILY_SUMMARY_HOUR_INVALID");
   if (!Number.isInteger(calendarSyncIntervalMs) || calendarSyncIntervalMs < 15_000 || calendarSyncIntervalMs > 3_600_000) throw new Error("WORKER_CALENDAR_SYNC_INTERVAL_MS_INVALID");
-  return { supabaseUrl: required("NEXT_PUBLIC_SUPABASE_URL"), supabaseKey: required("SUPABASE_SECRET_KEY"), evolutionBaseUrl: required("EVOLUTION_BASE_URL"), evolutionApiKey: required("EVOLUTION_API_KEY"), evolutionInstance: required("EVOLUTION_INSTANCE"), otpSecret, portalBaseUrl: portal.toString().replace(/\/$/, ""), handoffNotificationPhone, dailySummaryHour, googleCredentials, googleCalendarId: process.env.GOOGLE_CALENDAR_ID?.trim() || undefined, calendarSyncIntervalMs, openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined, openaiModel: process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini", interactiveMessages: booleanSetting("EVOLUTION_INTERACTIVE_MESSAGES"), recipientPolicy, pollMs, healthPort, workerId: process.env.WORKER_ID?.trim() || `worker-${randomUUID()}`, concurrency, leaseSeconds, allowedRecipients: [...new Set(allowedRecipients)] };
+  return { supabaseUrl: required("NEXT_PUBLIC_SUPABASE_URL"), supabaseKey: required("SUPABASE_SECRET_KEY"), evolutionBaseUrl: required("EVOLUTION_BASE_URL"), evolutionApiKey: required("EVOLUTION_API_KEY"), evolutionInstance: required("EVOLUTION_INSTANCE"), otpSecret, portalBaseUrl: portal.toString().replace(/\/$/, ""), handoffNotificationPhone, dailySummaryHour, googleCredentials, googleCalendarId: process.env.GOOGLE_CALENDAR_ID?.trim() || undefined, calendarSyncIntervalMs, openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined, openaiModel: process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini", interactiveMessages: booleanSetting("EVOLUTION_INTERACTIVE_MESSAGES"), recipientPolicy, pollMs, healthPort, workerId: process.env.WORKER_ID?.trim() || `worker-${randomUUID()}`, concurrency, leaseSeconds, allowedRecipients: [...new Set(allowedRecipients)], humanTakeoverPauseMinutes: 20 };
 }
 const opaqueToken = () => randomBytes(32).toString("base64url");
 const tokenHash = (token: string) => createHash("sha256").update(token, "utf8").digest("hex");
@@ -199,18 +200,25 @@ export class MessagingWorker {
       await this.updateOrThrow("notification_outbox", row.id, { status: "failed", available_at: retryAt(row.attempts), last_error: deadLetter ? "max_attempts_exceeded" : "delivery_failed", dead_lettered_at: deadLetter ? new Date().toISOString() : null }, row.lease_token);
     }
   }
-  private async sendOtp(row: OutboxRow) { const [{ data: access }, { data: delivery }] = await Promise.all([this.db.from("access_tokens").select("phone,expires_at,status").eq("id", row.aggregate_id).single(), this.db.from("otp_delivery_secrets").select("encrypted_code").eq("access_token_id", row.aggregate_id).single()]); if (!access || access.status !== "active" || new Date(access.expires_at) <= new Date()) throw new Error("OTP_EXPIRED"); if (!this.recipientAllowed(access.phone)) throw new Error("RECIPIENT_NOT_ALLOWED"); if (!delivery) throw new Error("OTP_NOT_READY"); await this.evolution.sendText(access.phone, otpMessage(decryptOtp(delivery.encrypted_code, this.config.otpSecret))); const { error } = await this.db.from("otp_delivery_secrets").delete().eq("access_token_id", row.aggregate_id); if (error) throw new Error("OTP_SECRET_DELETE_FAILED"); }
+  private async markBotOutbound(phone: string, text: string) {
+    if (!this.config.humanTakeoverPauseMinutes) return;
+    const { error } = await this.db.from("whatsapp_bot_outbound_markers").insert({ phone, message_fingerprint: whatsappMessageFingerprint(phone, text), expires_at: new Date(Date.now() + 5 * 60_000).toISOString() });
+    if (error) throw new Error("BOT_OUTBOUND_MARKER_FAILED");
+  }
+  private async sendBotText(phone: string, text: string) { await this.markBotOutbound(phone, text); await this.evolution.sendText(phone, text); }
+  private async sendBotButtons(phone: string, reply: InteractiveMessage) { await this.markBotOutbound(phone, reply.description); await this.evolution.sendButtons(phone, reply); }
+  private async sendOtp(row: OutboxRow) { const [{ data: access }, { data: delivery }] = await Promise.all([this.db.from("access_tokens").select("phone,expires_at,status").eq("id", row.aggregate_id).single(), this.db.from("otp_delivery_secrets").select("encrypted_code").eq("access_token_id", row.aggregate_id).single()]); if (!access || access.status !== "active" || new Date(access.expires_at) <= new Date()) throw new Error("OTP_EXPIRED"); if (!this.recipientAllowed(access.phone)) throw new Error("RECIPIENT_NOT_ALLOWED"); if (!delivery) throw new Error("OTP_NOT_READY"); await this.sendBotText(access.phone, otpMessage(decryptOtp(delivery.encrypted_code, this.config.otpSecret))); const { error } = await this.db.from("otp_delivery_secrets").delete().eq("access_token_id", row.aggregate_id); if (error) throw new Error("OTP_SECRET_DELETE_FAILED"); }
   private async sendReply(phone: string, reply: string | InteractiveMessage) {
-    if (typeof reply === "string") { await this.evolution.sendText(phone, reply); return; }
+    if (typeof reply === "string") { await this.sendBotText(phone, reply); return; }
     if (this.config.interactiveMessages) {
       try {
-        await this.evolution.sendButtons(phone, reply);
+        await this.sendBotButtons(phone, reply);
         return;
       } catch (error) {
         log("warn", "interactive_message_fallback", { error });
       }
     }
-    await this.evolution.sendText(phone, reply.fallbackText);
+    await this.sendBotText(phone, reply.fallbackText);
   }
   private async sendAppointment(row: OutboxRow) {
     const { data } = await this.db.from("appointments").select("start_at,patients(phone),professionals(name)").eq("id", row.aggregate_id).single();
@@ -239,14 +247,14 @@ export class MessagingWorker {
     const { data, error } = await this.db.rpc("get_daily_confirmation_summary", { p_summary_date: summaryDate });
     const summary = data as DailyConfirmationSummary | null;
     if (error || !summary || !Number.isInteger(summary.total) || !Number.isInteger(summary.confirmed) || !Array.isArray(summary.unconfirmed)) throw new Error("DAILY_SUMMARY_LOOKUP_FAILED");
-    await this.evolution.sendText(this.config.handoffNotificationPhone, dailyConfirmationSummaryMessage(summary));
+    await this.sendBotText(this.config.handoffNotificationPhone, dailyConfirmationSummaryMessage(summary));
   }
   private async sendHandoffNotification(row: OutboxRow) {
     const { data: handoff, error: handoffError } = await this.db.from("human_handoffs").select("phone,reason").eq("id", row.aggregate_id).single();
     if (handoffError || !handoff?.phone || !handoff?.reason) throw new Error("HANDOFF_NOT_FOUND");
     const { data: patient, error: patientError } = await this.db.from("patients").select("name").eq("phone", handoff.phone).maybeSingle();
     if (patientError) throw new Error("HANDOFF_PATIENT_LOOKUP_FAILED");
-    await this.evolution.sendText(this.config.handoffNotificationPhone, handoffNotificationMessage({ patientName: patient?.name ?? null, patientPhone: handoff.phone, reason: handoff.reason }));
+    await this.sendBotText(this.config.handoffNotificationPhone, handoffNotificationMessage({ patientName: patient?.name ?? null, patientPhone: handoff.phone, reason: handoff.reason }));
   }
   async processInbox(row: InboxRow) {
     const startedAt = Date.now();
