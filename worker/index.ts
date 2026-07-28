@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { EvolutionClient } from "../src/integrations/evolution/client.ts";
 import { decryptOtp } from "../src/lib/messaging/otp-cipher.ts";
-import { classifyIntent, isExplicitHumanRequest } from "../src/domain/messaging/intent.ts";
+import { classifyIntent, isClinicalQuestion, isExplicitHumanRequest } from "../src/domain/messaging/intent.ts";
 import { whatsappMessageFingerprint } from "../src/domain/messaging/fingerprint.ts";
 import { handoffNotificationMessage, handoffReason } from "../src/domain/messaging/handoff.ts";
 import {
@@ -15,17 +15,20 @@ import {
   dailyConfirmationSummaryMessage,
   greetingInteractiveMessage,
   humanFallbackMessage,
+  caixaInsuranceMessage,
+  initialInsurancePromptMessage,
   insurancePromptMessage,
   knowledgeAnswerInteractiveMessage,
   menuActions,
   otpMessage,
   procedurePromptMessage,
   questionsInteractiveMessage,
+  unsupportedInsuranceMessage,
   unsupportedMediaInteractiveMessage,
   type InteractiveMessage,
   type DailyConfirmationSummary,
 } from "../src/domain/messaging/templates.ts";
-import { findStructuredAnswer, type KnowledgeData } from "../src/domain/knowledge/service.ts";
+import { findStructuredAnswer, triageInsurancePlan, type KnowledgeData } from "../src/domain/knowledge/service.ts";
 import { generateClinicReply } from "../src/integrations/openai/chat.ts";
 import { isCorrelationId, log } from "../src/lib/observability/logger.ts";
 import { incrementCounter, renderPrometheusMetrics, setGauge } from "../src/lib/observability/metrics.ts";
@@ -39,8 +42,14 @@ import { syncDirectCalendarAppointments } from "./calendar-sync.ts";
 
 type OutboxRow = { id: string; aggregate_id: string; event_type: string; attempts: number; lease_token?: string; payload?: { correlation_id?: unknown; scheduled_start_at?: unknown; summary_date?: unknown } };
 type InboxRow = { id: string; phone: string; message_text: string; attempts: number; lease_token?: string };
+type PlanTriageSession = { status: "awaiting_plan" | "accepted" | "rejected"; pending_message: string; prompted_by_inbox_id: string; expires_at: string };
+type PlanTriageDecision =
+  | { kind: "continue" }
+  | { kind: "resume"; message: string; planId: string }
+  | { kind: "reply"; message: string; action: "plan_requested" | "plan_rejected" | "plan_rejected_caixa"; rejectedSession?: Pick<PlanTriageSession, "pending_message" | "prompted_by_inbox_id"> }
+  | { kind: "closed" };
 type RecipientPolicy = "all" | "allowlist";
-type Config = { supabaseUrl: string; supabaseKey: string; evolutionBaseUrl: string; evolutionApiKey: string; evolutionInstance: string; otpSecret: string; portalBaseUrl: string; handoffNotificationPhone: string; dailySummaryHour?: number; googleCredentials?: GoogleServiceAccountCredentials; googleCalendarId?: string; calendarSyncIntervalMs?: number; openaiApiKey?: string; openaiModel: string; interactiveMessages?: boolean; recipientPolicy?: RecipientPolicy; pollMs: number; healthPort: number; workerId?: string; concurrency?: number; leaseSeconds?: number; allowedRecipients?: string[]; humanTakeoverPauseMinutes?: number };
+type Config = { supabaseUrl: string; supabaseKey: string; evolutionBaseUrl: string; evolutionApiKey: string; evolutionInstance: string; otpSecret: string; portalBaseUrl: string; handoffNotificationPhone: string; dailySummaryHour?: number; googleCredentials?: GoogleServiceAccountCredentials; googleCalendarId?: string; calendarSyncIntervalMs?: number; openaiApiKey?: string; openaiModel: string; interactiveMessages?: boolean; recipientPolicy?: RecipientPolicy; pollMs: number; healthPort: number; workerId?: string; concurrency?: number; leaseSeconds?: number; allowedRecipients?: string[]; humanTakeoverPauseMinutes?: number; planTriageEnabled?: boolean };
 
 function required(name: string) { const value = process.env[name]?.trim(); if (!value) throw new Error(`Missing ${name}`); return value; }
 function booleanSetting(name: string, fallback = false) { const value = process.env[name]?.trim().toLowerCase(); if (!value) return fallback; if (value === "true") return true; if (value === "false") return false; throw new Error(`${name}_INVALID`); }
@@ -67,7 +76,7 @@ export function loadWorkerConfig(): Config {
   if (!Number.isFinite(pollMs) || pollMs < 250 || !Number.isInteger(healthPort) || healthPort < 1 || healthPort > 65535 || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 20 || !Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) throw new Error("WORKER_INTERVAL_OR_PORT_INVALID");
   if (!Number.isInteger(dailySummaryHour) || dailySummaryHour < 0 || dailySummaryHour > 23) throw new Error("WORKER_DAILY_SUMMARY_HOUR_INVALID");
   if (!Number.isInteger(calendarSyncIntervalMs) || calendarSyncIntervalMs < 15_000 || calendarSyncIntervalMs > 3_600_000) throw new Error("WORKER_CALENDAR_SYNC_INTERVAL_MS_INVALID");
-  return { supabaseUrl: required("NEXT_PUBLIC_SUPABASE_URL"), supabaseKey: required("SUPABASE_SECRET_KEY"), evolutionBaseUrl: required("EVOLUTION_BASE_URL"), evolutionApiKey: required("EVOLUTION_API_KEY"), evolutionInstance: required("EVOLUTION_INSTANCE"), otpSecret, portalBaseUrl: portal.toString().replace(/\/$/, ""), handoffNotificationPhone, dailySummaryHour, googleCredentials, googleCalendarId: process.env.GOOGLE_CALENDAR_ID?.trim() || undefined, calendarSyncIntervalMs, openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined, openaiModel: process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini", interactiveMessages: booleanSetting("EVOLUTION_INTERACTIVE_MESSAGES"), recipientPolicy, pollMs, healthPort, workerId: process.env.WORKER_ID?.trim() || `worker-${randomUUID()}`, concurrency, leaseSeconds, allowedRecipients: [...new Set(allowedRecipients)], humanTakeoverPauseMinutes: 20 };
+  return { supabaseUrl: required("NEXT_PUBLIC_SUPABASE_URL"), supabaseKey: required("SUPABASE_SECRET_KEY"), evolutionBaseUrl: required("EVOLUTION_BASE_URL"), evolutionApiKey: required("EVOLUTION_API_KEY"), evolutionInstance: required("EVOLUTION_INSTANCE"), otpSecret, portalBaseUrl: portal.toString().replace(/\/$/, ""), handoffNotificationPhone, dailySummaryHour, googleCredentials, googleCalendarId: process.env.GOOGLE_CALENDAR_ID?.trim() || undefined, calendarSyncIntervalMs, openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined, openaiModel: process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini", interactiveMessages: booleanSetting("EVOLUTION_INTERACTIVE_MESSAGES"), recipientPolicy, pollMs, healthPort, workerId: process.env.WORKER_ID?.trim() || `worker-${randomUUID()}`, concurrency, leaseSeconds, allowedRecipients: [...new Set(allowedRecipients)], humanTakeoverPauseMinutes: 20, planTriageEnabled: true };
 }
 const opaqueToken = () => randomBytes(32).toString("base64url");
 const tokenHash = (token: string) => createHash("sha256").update(token, "utf8").digest("hex");
@@ -78,7 +87,7 @@ export class MessagingWorker {
   private lastCalendarSyncAt = 0; private calendarSyncHealthy = true;
   private readonly calendarAuth?: GoogleServiceAccountAuth;
   private readonly db: SupabaseClient; private readonly evolution: EvolutionClient; private readonly config: Config;
-  constructor(db: SupabaseClient, evolution: EvolutionClient, config: Config) { this.db = db; this.evolution = evolution; this.config = { ...config, workerId: config.workerId ?? `worker-${randomUUID()}`, concurrency: config.concurrency ?? 5, leaseSeconds: config.leaseSeconds ?? 300, interactiveMessages: config.interactiveMessages ?? false, recipientPolicy: config.recipientPolicy ?? "allowlist", calendarSyncIntervalMs: config.calendarSyncIntervalMs ?? 60_000 }; this.calendarAuth = config.googleCredentials ? new GoogleServiceAccountAuth(config.googleCredentials) : undefined; }
+  constructor(db: SupabaseClient, evolution: EvolutionClient, config: Config) { this.db = db; this.evolution = evolution; this.config = { ...config, workerId: config.workerId ?? `worker-${randomUUID()}`, concurrency: config.concurrency ?? 5, leaseSeconds: config.leaseSeconds ?? 300, interactiveMessages: config.interactiveMessages ?? false, recipientPolicy: config.recipientPolicy ?? "allowlist", calendarSyncIntervalMs: config.calendarSyncIntervalMs ?? 60_000, planTriageEnabled: config.planTriageEnabled ?? false }; this.calendarAuth = config.googleCredentials ? new GoogleServiceAccountAuth(config.googleCredentials) : undefined; }
   private recipientAllowed(phone: string) { return this.config.recipientPolicy === "all" || (this.config.allowedRecipients ?? []).includes(phone); }
   async tick() {
     if (this.stopped) return;
@@ -256,9 +265,42 @@ export class MessagingWorker {
     if (patientError) throw new Error("HANDOFF_PATIENT_LOOKUP_FAILED");
     await this.sendBotText(this.config.handoffNotificationPhone, handoffNotificationMessage({ patientName: patient?.name ?? null, patientPhone: handoff.phone, reason: handoff.reason }));
   }
+  private async savePlanTriage(phone: string, values: Record<string, unknown>) {
+    const { error } = await this.db.from("whatsapp_plan_triage_sessions").upsert({ phone, ...values }, { onConflict: "phone" });
+    if (error) throw new Error("PLAN_TRIAGE_STATE_FAILED");
+  }
+  private async preparePlanTriage(row: InboxRow): Promise<PlanTriageDecision> {
+    if (!this.config.planTriageEnabled) return { kind: "continue" };
+    const { data, error } = await this.db.from("whatsapp_plan_triage_sessions").select("status,pending_message,prompted_by_inbox_id,expires_at").eq("phone", row.phone).maybeSingle();
+    if (error) throw new Error("PLAN_TRIAGE_LOOKUP_FAILED");
+    const session = data as PlanTriageSession | null;
+    if (!session || new Date(session.expires_at).getTime() <= Date.now()) {
+      await this.savePlanTriage(row.phone, { status: "awaiting_plan", pending_message: row.message_text, prompted_by_inbox_id: row.id, insurance_plan_id: null, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
+      return { kind: "reply", message: initialInsurancePromptMessage, action: "plan_requested" };
+    }
+    if (session.status === "accepted") return { kind: "continue" };
+    if (session.status === "rejected") return { kind: "closed" };
+    if (session.prompted_by_inbox_id === row.id) return { kind: "reply", message: initialInsurancePromptMessage, action: "plan_requested" };
+
+    const knowledge = await this.loadKnowledge();
+    const result = triageInsurancePlan(row.message_text, knowledge);
+    if (result.kind === "caixa") {
+      return { kind: "reply", message: caixaInsuranceMessage, action: "plan_rejected_caixa", rejectedSession: session };
+    }
+    if (result.kind === "unsupported") {
+      return { kind: "reply", message: unsupportedInsuranceMessage, action: "plan_rejected", rejectedSession: session };
+    }
+    return { kind: "resume", message: session.pending_message, planId: result.plan.id };
+  }
+  private async acceptPlanTriage(phone: string, planId: string, pendingMessage: string, promptedByInboxId: string) {
+    await this.savePlanTriage(phone, { status: "accepted", pending_message: pendingMessage, prompted_by_inbox_id: promptedByInboxId, insurance_plan_id: planId, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
+    const { error } = await this.db.from("patients").upsert({ phone, insurance_plan_id: planId }, { onConflict: "phone" });
+    if (error) throw new Error("PLAN_TRIAGE_PATIENT_UPDATE_FAILED");
+  }
   async processInbox(row: InboxRow) {
     const startedAt = Date.now();
-    const intent = classifyIntent(row.message_text);
+    let messageText = row.message_text;
+    let intent = classifyIntent(messageText);
     log("debug", "inbox_processing_started", { correlationId: row.id, intent, attempts: row.attempts });
     if (!this.recipientAllowed(row.phone)) {
       await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: "recipient_not_allowed", classified_intent: intent, processed_action: "ignored" }, row.lease_token);
@@ -274,9 +316,31 @@ export class MessagingWorker {
       return;
     }
     try {
+      const triage = await this.preparePlanTriage(row);
+      if (triage.kind === "closed") {
+        await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: null, classified_intent: intent, processed_action: "ignored" }, row.lease_token);
+        log("info", "inbox_plan_triage_closed", { correlationId: row.id });
+        return;
+      }
+      if (triage.kind === "reply") {
+        await this.sendReply(row.phone, triage.message);
+        if (triage.rejectedSession) {
+          await this.savePlanTriage(row.phone, { status: "rejected", pending_message: triage.rejectedSession.pending_message, prompted_by_inbox_id: triage.rejectedSession.prompted_by_inbox_id, insurance_plan_id: null, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
+        }
+        await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: null, classified_intent: intent, processed_action: triage.action }, row.lease_token);
+        incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "inbox", result: triage.action });
+        log("info", "inbox_plan_triage_processed", { correlationId: row.id, action: triage.action, attempts: row.attempts, durationMs: Date.now() - startedAt });
+        return;
+      }
+      const acceptedPlan = triage.kind === "resume" ? { id: triage.planId, pendingMessage: triage.message } : null;
+      if (triage.kind === "resume") {
+        messageText = triage.message;
+        intent = classifyIntent(messageText);
+      }
       let reply: string | InteractiveMessage;
       let handoff = false;
       let usedLlm = false;
+      let usedFallback = false;
       let processedAction: string | undefined;
       if (intent === "confirm") {
         const { data, error } = await this.db.rpc("confirm_upcoming_appointment_by_phone", { p_phone: row.phone });
@@ -288,33 +352,43 @@ export class MessagingWorker {
       }
       else if (["schedule", "reschedule", "cancel"].includes(intent)) reply = accessLinkInteractiveMessage(await this.createAccessUrl(row.phone), intent);
       else if (intent === "greeting") reply = greetingInteractiveMessage;
-      else if (row.message_text === menuActions.questions) reply = questionsInteractiveMessage;
-      else if (row.message_text === menuActions.insurance) reply = insurancePromptMessage;
-      else if (row.message_text === menuActions.procedures) reply = procedurePromptMessage;
-      else if (row.message_text === menuActions.unsupportedMedia) reply = unsupportedMediaInteractiveMessage;
-      else if (isExplicitHumanRequest(row.message_text)) { reply = humanFallbackMessage; handoff = true; }
+      else if (messageText === menuActions.questions) reply = questionsInteractiveMessage;
+      else if (messageText === menuActions.insurance) reply = insurancePromptMessage;
+      else if (messageText === menuActions.procedures) reply = procedurePromptMessage;
+      else if (messageText === menuActions.unsupportedMedia) reply = unsupportedMediaInteractiveMessage;
+      else if (isExplicitHumanRequest(messageText)) { reply = humanFallbackMessage; handoff = true; }
       else {
         const knowledge = await this.loadKnowledge();
-        const structuredAnswer = findStructuredAnswer(row.message_text, knowledge);
+        const structuredAnswer = findStructuredAnswer(messageText, knowledge);
         if (this.config.openaiApiKey) {
           try {
-            const generated = await generateClinicReply({ apiKey: this.config.openaiApiKey, model: this.config.openaiModel, message: row.message_text, knowledge });
+            const generated = await generateClinicReply({ apiKey: this.config.openaiApiKey, model: this.config.openaiModel, message: messageText, knowledge });
             usedLlm = true;
-            handoff = generated.handoffRequired || !structuredAnswer;
+            handoff = generated.handoffRequired;
             reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(generated.text);
           } catch (error) {
             log("warn", "openai_reply_failed", { correlationId: row.id, error });
-            handoff = !structuredAnswer;
-            reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(`Claro! ${structuredAnswer}`);
+            handoff = !structuredAnswer && isClinicalQuestion(messageText);
+            usedFallback = !handoff && !structuredAnswer;
+            reply = handoff
+              ? humanFallbackMessage
+              : knowledgeAnswerInteractiveMessage(structuredAnswer ? `Claro! ${structuredAnswer}` : "Não consegui consultar essa informação agora. Pode tentar novamente em instantes?");
           }
-        } else { handoff = !structuredAnswer; reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(`Claro! ${structuredAnswer}`); }
+        } else {
+          handoff = !structuredAnswer && isClinicalQuestion(messageText);
+          usedFallback = !handoff && !structuredAnswer;
+          reply = handoff
+            ? humanFallbackMessage
+            : knowledgeAnswerInteractiveMessage(structuredAnswer ? `Claro! ${structuredAnswer}` : "Não consegui consultar essa informação agora. Pode tentar novamente em instantes?");
+        }
       }
       if (handoff) {
-        const { data: handoffId, error } = await this.db.rpc("enqueue_human_handoff", { p_inbox_id: row.id, p_phone: row.phone, p_reason: handoffReason(row.message_text) });
+        const { data: handoffId, error } = await this.db.rpc("enqueue_human_handoff", { p_inbox_id: row.id, p_phone: row.phone, p_reason: handoffReason(messageText) });
         if (error || !handoffId) throw new Error("HANDOFF_ENQUEUE_FAILED");
       }
       await this.sendReply(row.phone, reply);
-      const action = processedAction ?? (handoff ? "handoff" : ["schedule", "reschedule", "cancel"].includes(intent) ? "portal_link" : usedLlm ? "llm_answer" : "structured_answer");
+      if (acceptedPlan) await this.acceptPlanTriage(row.phone, acceptedPlan.id, acceptedPlan.pendingMessage, row.id);
+      const action = processedAction ?? (handoff ? "handoff" : ["schedule", "reschedule", "cancel"].includes(intent) ? "portal_link" : usedLlm ? "llm_answer" : usedFallback ? "fallback_answer" : "structured_answer");
       await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: null, classified_intent: intent, processed_action: action }, row.lease_token);
       incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "inbox", result: handoff ? "handoff" : "answered" });
       log("info", "inbox_message_processed", { correlationId: row.id, intent, action, attempts: row.attempts, durationMs: Date.now() - startedAt });

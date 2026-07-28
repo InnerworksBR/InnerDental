@@ -34,8 +34,8 @@ values
   ('Amil Dental', true, null),
   ('Uniodonto', true, null),
   ('MetLife', true, null),
-  ('Caixa de Pecúlio de São Vicente', true, 'Encaminhar para atendimento humano.'),
-  ('Caixa de Saúde de São Vicente', true, 'Encaminhar para atendimento humano.')
+  ('Caixa de Pecúlio de São Vicente', false, 'Não é mais atendido pela Dra. Tarcília.'),
+  ('Caixa de Saúde de São Vicente', false, 'Não é mais atendido pela Dra. Tarcília.')
 on conflict (name) do update set active = excluded.active, instructions = excluded.instructions;
 
 insert into public.insurance_aliases (insurance_plan_id, alias)

@@ -7,6 +7,13 @@ export function isExplicitHumanRequest(message: string): boolean {
   const asksForContact = /\b(falar|conversar|chamar|transferir|encaminhar|quero|preciso|gostaria)\b/.test(text);
   return mentionsPerson && asksForContact;
 }
+export function isClinicalQuestion(message: string): boolean {
+  const text = normalized(message);
+  if (/\b(dor|doendo|inchaco|inchado|sangramento|sangrando|febre|pus|infeccao|trauma|alergia|urgencia|emergencia|pos operatorio|pos operatoria|complicacao|receita|prescricao|remedio|medicamento|antibiotico|analgesico|diagnostico|laudo|contraindicacao)\b/.test(text)) return true;
+  const asksForClinicalAdvice = /\b(devo|posso|pode|melhor|indica|recomenda|preciso)\b/.test(text);
+  const mentionsTreatmentDecision = /\b(tratamento|procedimento|extracao|extrair|implante|canal|cirurgia|dente)\b/.test(text);
+  return asksForClinicalAdvice && mentionsTreatmentDecision;
+}
 export function classifyIntent(message: string): MessageIntent {
   const text = normalized(message);
   if (text === "menu.agenda") return "schedule";
@@ -19,7 +26,8 @@ export function classifyIntent(message: string): MessageIntent {
   if (/\b(remarcar|reagendar|mudar.*horario)\b/.test(text)) return "reschedule";
   if (/\b(cancelar|desmarcar)\b/.test(text)) return "cancel";
   if (/\b(confirmo|confirmar(?: minha)? presenca|vou comparecer|estarei presente)\b/.test(text)) return "confirm";
-  if (/\b(marcar|agendar|consulta|horario)\b/.test(text)) return "schedule";
+  if (/\b(endereco|localizacao|onde fica|qual.*sala|sala.*qual|horario de funcionamento|funcionamento|documentos|pagamento|estacionamento)\b/.test(text)) return "faq";
+  if (/\b(marcar|marca|marque|agendar|agenda|agende|consulta|horario)\b/.test(text)) return "schedule";
   if (/\b(plano|convenio|aceit\w*|cobertura)\b/.test(text)) return "insurance";
   if (/\b(procedimento|tratamento|limpeza|clareamento|canal|implante)\b/.test(text)) return "procedure";
   if (/\b(como|quando|onde|duvida|pergunta)\b/.test(text)) return "faq";

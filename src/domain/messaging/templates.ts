@@ -183,6 +183,9 @@ export const questionsInteractiveMessage: InteractiveMessage = {
 };
 
 export const insurancePromptMessage = "Qual é o nome do plano que você gostaria de consultar?";
+export const initialInsurancePromptMessage = "Olá! Antes de qualquer coisa, qual é o seu plano odontológico?";
+export const unsupportedInsuranceMessage = "No momento, esse plano não está entre os planos atendidos pela Dra. Tarcília. Agradecemos o contato.";
+export const caixaInsuranceMessage = "Esse plano não é mais atendido pela Dra. Tarcília. Agradecemos o contato.";
 export const procedurePromptMessage = "Qual procedimento você gostaria de consultar?";
 
 export const unsupportedMediaInteractiveMessage: InteractiveMessage = {
