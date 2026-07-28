@@ -53,6 +53,7 @@ on conflict (insurance_plan_id, alias) do nothing;
 insert into public.procedures (name, description, online_booking, active)
 values
   ('Consulta padrão', 'Agendamento online de avaliação em janela de 15 minutos.', true, true),
+  ('Limpeza', 'Agendamento online iniciado por consulta de avaliação.', true, true),
   ('Prótese', 'Conforme plano; iniciar por avaliação.', true, true),
   ('Ortodontia', 'Conforme plano; iniciar por avaliação.', true, true),
   ('Canal em molar', 'Não realizado.', false, false),

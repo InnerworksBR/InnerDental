@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { EvolutionClient } from "../src/integrations/evolution/client.ts";
 import { decryptOtp } from "../src/lib/messaging/otp-cipher.ts";
-import { classifyIntent, isClinicalQuestion, isExplicitHumanRequest } from "../src/domain/messaging/intent.ts";
+import { classifyIntent, isClinicalQuestion, isExplicitHumanRequest, isProcedureBookingRequest } from "../src/domain/messaging/intent.ts";
 import { whatsappMessageFingerprint } from "../src/domain/messaging/fingerprint.ts";
 import { handoffNotificationMessage, handoffReason } from "../src/domain/messaging/handoff.ts";
 import {
@@ -28,7 +28,7 @@ import {
   type InteractiveMessage,
   type DailyConfirmationSummary,
 } from "../src/domain/messaging/templates.ts";
-import { findStructuredAnswer, triageInsurancePlan, type KnowledgeData } from "../src/domain/knowledge/service.ts";
+import { findRequestedProcedure, findStructuredAnswer, triageInsurancePlan, type KnowledgeData } from "../src/domain/knowledge/service.ts";
 import { generateClinicReply } from "../src/integrations/openai/chat.ts";
 import { isCorrelationId, log } from "../src/lib/observability/logger.ts";
 import { incrementCounter, renderPrometheusMetrics, setGauge } from "../src/lib/observability/metrics.ts";
@@ -342,6 +342,10 @@ export class MessagingWorker {
       let usedLlm = false;
       let usedFallback = false;
       let processedAction: string | undefined;
+      let knowledge: KnowledgeData | undefined;
+      const requestedProcedure = intent === "procedure" && isProcedureBookingRequest(messageText)
+        ? findRequestedProcedure(messageText, knowledge = await this.loadKnowledge())
+        : null;
       if (intent === "confirm") {
         const { data, error } = await this.db.rpc("confirm_upcoming_appointment_by_phone", { p_phone: row.phone });
         const result = data as { status?: "confirmed" | "already_confirmed" | "not_found" | "ambiguous"; start_at?: string } | null;
@@ -349,6 +353,10 @@ export class MessagingWorker {
         const accessUrl = ["not_found", "ambiguous"].includes(result.status) ? await this.createAccessUrl(row.phone) : undefined;
         reply = attendanceConfirmationReplyMessage(result.status, result.start_at, accessUrl);
         processedAction = result.status === "confirmed" ? "appointment_confirmed" : result.status === "already_confirmed" ? "appointment_already_confirmed" : `confirmation_${result.status}`;
+      }
+      else if (requestedProcedure?.online_booking) {
+        reply = accessLinkInteractiveMessage(await this.createAccessUrl(row.phone), "schedule");
+        processedAction = "portal_link";
       }
       else if (["schedule", "reschedule", "cancel"].includes(intent)) reply = accessLinkInteractiveMessage(await this.createAccessUrl(row.phone), intent);
       else if (intent === "greeting") reply = greetingInteractiveMessage;
@@ -358,7 +366,7 @@ export class MessagingWorker {
       else if (messageText === menuActions.unsupportedMedia) reply = unsupportedMediaInteractiveMessage;
       else if (isExplicitHumanRequest(messageText)) { reply = humanFallbackMessage; handoff = true; }
       else {
-        const knowledge = await this.loadKnowledge();
+        knowledge ??= await this.loadKnowledge();
         const structuredAnswer = findStructuredAnswer(messageText, knowledge);
         if (this.config.openaiApiKey) {
           try {

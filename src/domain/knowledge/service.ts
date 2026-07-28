@@ -44,6 +44,10 @@ export function triageInsurancePlan(message: string, data: Pick<KnowledgeData, "
   return { kind: "accepted", plan: partialMatches[0].plan };
 }
 
+export function findRequestedProcedure(message: string, data: Pick<KnowledgeData, "procedures">): KnowledgeData["procedures"][number] | null {
+  return data.procedures.find((entry) => containsTerm(message, entry.name)) ?? null;
+}
+
 export function findStructuredAnswer(message: string, data: KnowledgeData): string | null {
   const normalizedMessage = normalize(message);
   const alias = data.aliases.find((entry) => containsTerm(message, entry.alias));
@@ -53,7 +57,7 @@ export function findStructuredAnswer(message: string, data: KnowledgeData): stri
     && /\b(plano|planos|convenio|convenios)\b/.test(normalizedMessage)
     && /\b(quais|lista|todos|aceita|aceitam|aceito|aceitos|atende|atendem)\b/.test(normalizedMessage);
   if (asksForPlanList && data.plans.length > 0) return `Os planos ativos são: ${data.plans.map((entry) => entry.name).join(", ")}.`;
-  const procedure = data.procedures.find((entry) => containsTerm(message, entry.name));
+  const procedure = findRequestedProcedure(message, data);
   if (procedure) return `${procedure.name}: ${procedure.description ?? "Consulte a equipe para detalhes."}${procedure.online_booking ? " O agendamento pode ser iniciado pelo portal." : " A equipe precisa orientar o atendimento."}`;
   const childProcedure = data.procedures.find((entry) => ["criancas", "odontopediatria", "pediatria"].includes(normalize(entry.name)));
   if (childProcedure && /\b(crianca|criancas|filho|filha|menor|idade|anos)\b/.test(normalizedMessage)) return `${childProcedure.name}: ${childProcedure.description ?? "Consulte a equipe para detalhes."}`;

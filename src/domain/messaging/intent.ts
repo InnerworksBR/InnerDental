@@ -14,6 +14,13 @@ export function isClinicalQuestion(message: string): boolean {
   const mentionsTreatmentDecision = /\b(tratamento|procedimento|extracao|extrair|implante|canal|cirurgia|dente)\b/.test(text);
   return asksForClinicalAdvice && mentionsTreatmentDecision;
 }
+export function isProcedureBookingRequest(message: string): boolean {
+  const text = normalized(message);
+  const asksToBook = /\b(marcar|marca|marque|agendar|agenda|agende)\b/.test(text);
+  const wantsProcedure = /\b(quero|queria|gostaria|desejo|pretendo|preciso|poderia)\b/.test(text)
+    && /\b(fazer|realizar)\b/.test(text);
+  return asksToBook || wantsProcedure;
+}
 export function classifyIntent(message: string): MessageIntent {
   const text = normalized(message);
   if (text === "menu.agenda") return "schedule";
@@ -27,9 +34,9 @@ export function classifyIntent(message: string): MessageIntent {
   if (/\b(cancelar|desmarcar)\b/.test(text)) return "cancel";
   if (/\b(confirmo|confirmar(?: minha)? presenca|vou comparecer|estarei presente)\b/.test(text)) return "confirm";
   if (/\b(endereco|localizacao|onde fica|qual.*sala|sala.*qual|horario de funcionamento|funcionamento|documentos|pagamento|estacionamento)\b/.test(text)) return "faq";
+  if (/\b(procedimento|tratamento|limpeza|profilaxia|clareamento|canal|implante|protese|ortodontia|aparelho|extracao|extrair|siso|urgencia|odontopediatria)\b/.test(text)) return "procedure";
   if (/\b(marcar|marca|marque|agendar|agenda|agende|consulta|horario)\b/.test(text)) return "schedule";
   if (/\b(plano|convenio|aceit\w*|cobertura)\b/.test(text)) return "insurance";
-  if (/\b(procedimento|tratamento|limpeza|clareamento|canal|implante)\b/.test(text)) return "procedure";
   if (/\b(como|quando|onde|duvida|pergunta)\b/.test(text)) return "faq";
   return "human";
 }

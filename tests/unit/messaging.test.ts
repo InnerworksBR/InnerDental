@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { classifyIntent, isClinicalQuestion, isExplicitHumanRequest } from "@/domain/messaging/intent";
+import { classifyIntent, isClinicalQuestion, isExplicitHumanRequest, isProcedureBookingRequest } from "@/domain/messaging/intent";
 import { whatsappMessageFingerprint } from "@/domain/messaging/fingerprint";
 import { appointmentConfirmationRequestInteractiveMessage, appointmentMessage, dailyConfirmationSummaryMessage, isAutomatedReplyEcho, menuActions, otpMessage } from "@/domain/messaging/templates";
-import { findStructuredAnswer, triageInsurancePlan } from "@/domain/knowledge/service";
+import { findRequestedProcedure, findStructuredAnswer, triageInsurancePlan } from "@/domain/knowledge/service";
 import { encryptOtp, decryptOtp } from "@/lib/messaging/otp-cipher";
 import { signEvolutionPayload, verifyEvolutionApiKey, verifyEvolutionSignature } from "@/integrations/evolution/signature";
 import { evolutionWebhookSchema, normalizeFromMeActivity, normalizeIncomingMessage } from "@/integrations/evolution/contract";
@@ -24,11 +24,19 @@ describe("messaging", () => {
   it("recognizes administrative questions and natural scheduling conjugations", () => {
     expect(classifyIntent("Me fala qual é a sala")).toBe("faq");
     expect(classifyIntent("Qual o horário de funcionamento?")).toBe("faq");
-    expect(classifyIntent("Poderia marca uma limpeza?")).toBe("schedule");
+    expect(classifyIntent("Poderia marca uma limpeza?")).toBe("procedure");
+    expect(classifyIntent("Gostaria de fazer uma limpeza")).toBe("procedure");
+    expect(isProcedureBookingRequest("Gostaria de fazer uma limpeza")).toBe(true);
+    expect(isProcedureBookingRequest("Vocês fazem limpeza?")).toBe(false);
     expect(classifyIntent("Bom dia estou chegando aqui\nme fala a sala qual é")).toBe("faq");
   });
   it("classifies textual and interactive attendance confirmations", () => { expect(classifyIntent("Confirmo")).toBe("confirm"); expect(classifyIntent("Vou comparecer")).toBe("confirm"); expect(classifyIntent(menuActions.appointmentConfirm)).toBe("confirm"); });
   it("resolves only active structured data supplied by the repository", () => { const answer = findStructuredAnswer("Vocês aceitam meu plano uni?", { plans: [{ id: "1", name: "Unimed", instructions: "Leve a carteirinha." }], aliases: [{ alias: "uni", insurance_plan_id: "1" }], procedures: [], faqs: [] }); expect(answer).toContain("Unimed"); expect(answer).toContain("carteirinha"); });
+  it("matches a requested procedure only against the active catalog loaded by the worker", () => {
+    const knowledge = { procedures: [{ name: "Limpeza", description: "Avaliação inicial.", online_booking: true }] };
+    expect(findRequestedProcedure("Gostaria de fazer uma limpeza", knowledge)).toEqual(knowledge.procedures[0]);
+    expect(findRequestedProcedure("Gostaria de fazer implante", knowledge)).toBeNull();
+  });
   it("answers broad plan and child-age questions from the registered knowledge", () => {
     const knowledge = { plans: [{ id: "1", name: "Unimed", instructions: null }, { id: "2", name: "Amil Dental", instructions: null }], aliases: [], procedures: [{ name: "Crianças", description: "Não são realizadas consultas em menores de 8 anos.", online_booking: false }], faqs: [] };
     expect(findStructuredAnswer("Quais planos vcs atendem?", knowledge)).toMatch(/Unimed[\s\S]*Amil Dental/);
@@ -239,6 +247,40 @@ describe("messaging", () => {
     expect(rpc).not.toHaveBeenCalled();
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("estacionamento"));
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "llm_answer" }));
+  });
+  it("sends the secure scheduling link when the person asks to book a registered online procedure", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const accessTokenInsert = vi.fn().mockResolvedValue({ error: null });
+    const knowledgeTable = (data: unknown[] = []) => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data, error: null }) }) });
+    const db = { from: (table: string) => {
+      if (table === "procedures") return knowledgeTable([{ name: "Limpeza", description: "Avaliação inicial.", online_booking: true }]);
+      if (["insurance_plans", "insurance_aliases", "faq_entries"].includes(table)) return knowledgeTable();
+      if (table === "access_tokens") return { insert: accessTokenInsert };
+      return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
+    } };
+    const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const worker = new MessagingWorker(db as never, evolution as never, { portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000014", phone: "5513999999999", message_text: "Gostaria de fazer uma limpeza", attempts: 1 });
+    expect(accessTokenInsert).toHaveBeenCalledOnce();
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/Agendar consulta[\s\S]*agenda\.example\/acesso#token=/));
+    expect(updates).toContainEqual(expect.objectContaining({ classified_intent: "procedure", processed_action: "portal_link" }));
+  });
+  it("does not send a scheduling link for a procedure that is not enabled for online booking", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const accessTokenInsert = vi.fn();
+    const knowledgeTable = (data: unknown[] = []) => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data, error: null }) }) });
+    const db = { from: (table: string) => {
+      if (table === "procedures") return knowledgeTable([{ name: "Extração de siso", description: "Apenas particular; encaminhar para avaliação.", online_booking: false }]);
+      if (["insurance_plans", "insurance_aliases", "faq_entries"].includes(table)) return knowledgeTable();
+      if (table === "access_tokens") return { insert: accessTokenInsert };
+      return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
+    } };
+    const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const worker = new MessagingWorker(db as never, evolution as never, { portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000015", phone: "5513999999999", message_text: "Gostaria de fazer uma extração de siso", attempts: 1 });
+    expect(accessTokenInsert).not.toHaveBeenCalled();
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("Apenas particular"));
+    expect(updates).toContainEqual(expect.objectContaining({ classified_intent: "procedure", processed_action: "structured_answer" }));
   });
   it("does not notify the doctor for an administrative question without a literal matcher hit", async () => {
     const updates: Record<string, unknown>[] = [];
