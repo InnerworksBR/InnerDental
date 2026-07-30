@@ -20,6 +20,8 @@ describe("messaging", () => {
     expect(classifyIntent("Olá, bom dia")).toBe("greeting");
     expect(isGreetingMessage("Olá, gostaria de fazer uma limpeza")).toBe(false);
     expect(isAccessLinkRequest("Perdi o link")).toBe(true);
+    expect(isAccessLinkRequest("OK. Mande-me o link")).toBe(true);
+    expect(classifyIntent("OK. Mande-me o link")).toBe("schedule");
     expect(classifyIntent("O link expirou, pode enviar novamente?")).toBe("schedule");
   });
   it("separates clinical judgment from administrative questions", () => {
@@ -132,6 +134,10 @@ describe("messaging", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({ message: "Acesse [aqui](https://link.de.agendamento).", handoff_reason: "none" }) }] }] }), { status: 200, headers: { "Content-Type": "application/json" } })));
     await expect(generateClinicReply({ apiKey: "test-key", model: "gpt-4o-mini", message: "Perdi o link", knowledge: { plans: [], aliases: [], procedures: [], faqs: [] } })).rejects.toThrow("OPENAI_UNGROUNDED_URL");
   });
+  it("rejects a placeholder link invented by OpenAI", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({ message: "Acesse [Gerenciar Consulta](#).", handoff_reason: "none" }) }] }] }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    await expect(generateClinicReply({ apiKey: "test-key", model: "gpt-4o-mini", message: "Mande-me o link", knowledge: { plans: [], aliases: [], procedures: [], faqs: [] } })).rejects.toThrow("OPENAI_UNGROUNDED_URL");
+  });
   it("retries only bounded transient failures with jitter", async () => {
     const operation = vi.fn().mockRejectedValueOnce(new Error("temporary")).mockResolvedValue("ok");
     const sleep = vi.fn().mockResolvedValue(undefined);
@@ -180,7 +186,7 @@ describe("messaging", () => {
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
     const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     const issuedAt = Date.now();
-    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000044", phone: "5513999999999", message_text: "Perdi o link", attempts: 1 });
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000044", phone: "5513999999999", message_text: "OK. Mande-me o link", attempts: 1 });
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/agenda\.example\/acesso#token=/));
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("expira em 24 horas"));
     expect(evolution.sendText).not.toHaveBeenCalledWith("5513999999999", expect.stringContaining("link.de.agendamento"));

@@ -24,7 +24,7 @@ export function isProcedureBookingRequest(message: string): boolean {
 export function isAccessLinkRequest(message: string): boolean {
   const text = normalized(message);
   const mentionsAccess = /\b(link|acesso|agenda)\b/.test(text);
-  const asksForAnother = /\b(perdi|perdeu|perdemos|nao abre|nao funciona|venceu|expirou|manda|mandar|envia|enviar|novo|novamente|de novo|cad[eê]|onde esta)\b/.test(text);
+  const asksForAnother = /\b(perdi|perdeu|perdemos|nao abre|nao funciona|venceu|expirou|mand[ae]|mandar|envi[ae]|enviar|pass[ae]|passar|quero|gostaria|preciso|pode|novo|novamente|de novo|qual|cad[eê]|onde esta)\b/.test(text);
   return mentionsAccess && asksForAnother;
 }
 export function isGreetingMessage(message: string): boolean {

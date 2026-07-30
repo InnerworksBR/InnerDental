@@ -15,6 +15,12 @@ function urlsIn(value: string) {
   return candidates.map((url) => url.replace(/[.,;!?]+$/, ""));
 }
 
+function linkTargetsIn(value: string) {
+  const markdownTargets = [...value.matchAll(/\[[^\]]+\]\(([^)]*)\)/g)].map((match) => match[1].trim());
+  const htmlTargets = [...value.matchAll(/\bhref\s*=\s*["']([^"']*)["']/gi)].map((match) => match[1].trim());
+  return [...markdownTargets, ...htmlTargets];
+}
+
 export async function generateClinicReply(input: {
   apiKey: string;
   model: string;
@@ -63,7 +69,9 @@ export async function generateClinicReply(input: {
     if (!text) throw new Error("OPENAI_EMPTY_RESPONSE");
     const reply = clinicReplySchema.parse(JSON.parse(text));
     const groundedData = JSON.stringify(input.knowledge);
-    if (urlsIn(reply.message).some((url) => !groundedData.includes(url))) throw new Error("OPENAI_UNGROUNDED_URL");
+    const hasUngroundedUrl = urlsIn(reply.message).some((url) => !groundedData.includes(url));
+    const hasUngroundedLinkTarget = linkTargetsIn(reply.message).some((target) => !target || target === "#" || !groundedData.includes(target));
+    if (hasUngroundedUrl || hasUngroundedLinkTarget) throw new Error("OPENAI_UNGROUNDED_URL");
     return { text: reply.message, handoffRequired: reply.handoff_reason !== "none", handoffReason: reply.handoff_reason };
   } finally { clearTimeout(timeout); }
 }
