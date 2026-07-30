@@ -21,6 +21,19 @@ export function isProcedureBookingRequest(message: string): boolean {
     && /\b(fazer|realizar)\b/.test(text);
   return asksToBook || wantsProcedure;
 }
+export function isAccessLinkRequest(message: string): boolean {
+  const text = normalized(message);
+  const mentionsAccess = /\b(link|acesso|agenda)\b/.test(text);
+  const asksForAnother = /\b(perdi|perdeu|perdemos|nao abre|nao funciona|venceu|expirou|manda|mandar|envia|enviar|novo|novamente|de novo|cad[eê]|onde esta)\b/.test(text);
+  return mentionsAccess && asksForAnother;
+}
+export function isGreetingMessage(message: string): boolean {
+  const text = normalized(message);
+  const withoutGreetings = text
+    .replace(/\b(oi|ola|bom dia|boa tarde|boa noite|tudo bem|obrigado|obrigada|obg)\b/g, "")
+    .replace(/[!,.?\s]+/g, "");
+  return withoutGreetings.length === 0 && /\b(oi|ola|bom dia|boa tarde|boa noite|tudo bem)\b/.test(text);
+}
 export function isAppointmentStatusRequest(message: string): boolean {
   const text = normalized(message);
   const startsNewBooking = /\b(marcar|marca|marque|agendar|agenda|agende)\b/.test(text)
@@ -44,7 +57,8 @@ export function classifyIntent(message: string): MessageIntent {
   if (["menu.questions", "menu.unsupported_media"].includes(text)) return "faq";
   if (text === "menu.handoff") return "human";
   if (text === "appointment.confirm") return "confirm";
-  if (/^(oi|ola|bom dia|boa tarde|boa noite|tudo bem|obrigad[oa]|obg)[!,. ]*$/.test(text)) return "greeting";
+  if (isGreetingMessage(message)) return "greeting";
+  if (isAccessLinkRequest(message)) return "schedule";
   if (isExplicitHumanRequest(message)) return "human";
   if (isAppointmentStatusRequest(message)) return "appointment_status";
   if (isTreatmentStatusRequest(message)) return "treatment_status";

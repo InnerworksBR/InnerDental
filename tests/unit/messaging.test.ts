@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { classifyIntent, isAppointmentStatusRequest, isClinicalQuestion, isExplicitHumanRequest, isProcedureBookingRequest, isTreatmentStatusRequest } from "@/domain/messaging/intent";
+import { classifyIntent, isAccessLinkRequest, isAppointmentStatusRequest, isClinicalQuestion, isExplicitHumanRequest, isGreetingMessage, isProcedureBookingRequest, isTreatmentStatusRequest } from "@/domain/messaging/intent";
 import { whatsappMessageFingerprint } from "@/domain/messaging/fingerprint";
 import { appointmentConfirmationRequestInteractiveMessage, appointmentMessage, caixaInsuranceMessage, dailyConfirmationSummaryMessage, isAutomatedReplyEcho, knowledgeAnswerInteractiveMessage, menuActions, otpMessage, unsupportedInsuranceMessage } from "@/domain/messaging/templates";
 import { findRequestedProcedure, findStructuredAnswer, triageInsurancePlan } from "@/domain/knowledge/service";
@@ -15,6 +15,13 @@ describe("messaging", () => {
   afterEach(() => vi.unstubAllGlobals());
   it("classifies scheduling and stable menu actions without ever selecting a slot", () => { expect(classifyIntent("Quero remarcar meu horário")).toBe("reschedule"); expect(classifyIntent("Vocês aceitam Unimed?")).toBe("insurance"); expect(classifyIntent(menuActions.agenda)).toBe("schedule"); expect(classifyIntent(menuActions.handoff)).toBe("human"); expect(classifyIntent("texto sem correspondência")).toBe("conversation"); });
   it("recognizes explicit requests for human service without treating every unknown question as one", () => { expect(isExplicitHumanRequest("Quero falar com a doutora")).toBe(true); expect(isExplicitHumanRequest("Pode me transferir para um atendente?")).toBe(true); expect(isExplicitHumanRequest("A clínica tem estacionamento?")).toBe(false); });
+  it("recognizes combined greetings and requests for a replacement access link", () => {
+    expect(isGreetingMessage("Olá, bom dia")).toBe(true);
+    expect(classifyIntent("Olá, bom dia")).toBe("greeting");
+    expect(isGreetingMessage("Olá, gostaria de fazer uma limpeza")).toBe(false);
+    expect(isAccessLinkRequest("Perdi o link")).toBe(true);
+    expect(classifyIntent("O link expirou, pode enviar novamente?")).toBe("schedule");
+  });
   it("separates clinical judgment from administrative questions", () => {
     expect(isClinicalQuestion("Estou com dor, inchaço e febre")).toBe(true);
     expect(isClinicalQuestion("Posso tomar antibiótico para esse dente?")).toBe(true);
@@ -121,6 +128,10 @@ describe("messaging", () => {
     expect(request.instructions).toContain("handoff_reason=clinical_question somente quando for necessária avaliação profissional");
     expect(request.text.format.schema.properties.handoff_reason.enum).toEqual(["none", "clinical_question", "explicit_human_request"]);
   });
+  it("rejects an URL invented by OpenAI", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({ message: "Acesse [aqui](https://link.de.agendamento).", handoff_reason: "none" }) }] }] }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    await expect(generateClinicReply({ apiKey: "test-key", model: "gpt-4o-mini", message: "Perdi o link", knowledge: { plans: [], aliases: [], procedures: [], faqs: [] } })).rejects.toThrow("OPENAI_UNGROUNDED_URL");
+  });
   it("retries only bounded transient failures with jitter", async () => {
     const operation = vi.fn().mockRejectedValueOnce(new Error("temporary")).mockResolvedValue("ok");
     const sleep = vi.fn().mockResolvedValue(undefined);
@@ -157,6 +168,20 @@ describe("messaging", () => {
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/continuar com o agendamento[\s\S]*plano odontológico/i));
     expect(sessions).toContainEqual(expect.objectContaining({ status: "awaiting_plan", pending_message: "quero marcar" }));
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "plan_requested" }));
+  });
+  it("issues a fresh secure link deterministically when the previous link was lost", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const db = { from: (table: string) => {
+      if (table === "whatsapp_plan_triage_sessions") return { select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }) }) };
+      if (table === "access_tokens") return { insert: vi.fn().mockResolvedValue({ error: null }) };
+      return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
+    } };
+    const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000044", phone: "5513999999999", message_text: "Perdi o link", attempts: 1 });
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/agenda\.example\/acesso#token=/));
+    expect(evolution.sendText).not.toHaveBeenCalledWith("5513999999999", expect.stringContaining("link.de.agendamento"));
+    expect(updates).toContainEqual(expect.objectContaining({ classified_intent: "schedule", processed_action: "portal_link" }));
   });
   it("answers an existing appointment question without asking for a plan", async () => {
     const updates: Record<string, unknown>[] = [];

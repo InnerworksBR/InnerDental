@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { EvolutionClient } from "../src/integrations/evolution/client.ts";
 import { decryptOtp } from "../src/lib/messaging/otp-cipher.ts";
-import { classifyIntent, isClinicalQuestion, isExplicitHumanRequest, isProcedureBookingRequest, type MessageIntent } from "../src/domain/messaging/intent.ts";
+import { classifyIntent, isAccessLinkRequest, isClinicalQuestion, isExplicitHumanRequest, isProcedureBookingRequest, type MessageIntent } from "../src/domain/messaging/intent.ts";
 import { whatsappMessageFingerprint } from "../src/domain/messaging/fingerprint.ts";
 import { handoffNotificationMessage, handoffReason } from "../src/domain/messaging/handoff.ts";
 import {
@@ -271,7 +271,7 @@ export class MessagingWorker {
     if (error) throw new Error("PLAN_TRIAGE_STATE_FAILED");
   }
   private requiresPlanTriage(intent: MessageIntent, message: string) {
-    return (intent === "schedule" && message !== menuActions.agenda)
+    return (intent === "schedule" && message !== menuActions.agenda && !isAccessLinkRequest(message))
       || (intent === "procedure" && isProcedureBookingRequest(message));
   }
   private likelyPlanAnswer(message: string) {
@@ -345,6 +345,7 @@ export class MessagingWorker {
         .select("message_text,classified_intent,processed_action")
         .eq("phone", phone)
         .neq("id", currentId)
+        .gte("created_at", new Date(Date.now() - 30 * 60_000).toISOString())
         .order("created_at", { ascending: false })
         .limit(5);
       if (error) return [];
