@@ -31,14 +31,14 @@ const intentCopy: Record<"schedule" | "reschedule" | "cancel", { title: string; 
 
 export function accessLinkMessage(url: string, intent: MessageIntent = "schedule") {
   const copy = intentCopy[intent as keyof typeof intentCopy] ?? intentCopy.schedule;
-  return `*${copy.title}*\n\nUse o link seguro abaixo para ${copy.action}:\n${url}\n\nO acesso expira em 30 minutos.`;
+  return `*${copy.title}*\n\nUse o link seguro abaixo para ${copy.action}:\n${url}\n\nO acesso expira em 24 horas.`;
 }
 
 export function accessLinkInteractiveMessage(url: string, intent: MessageIntent = "schedule"): InteractiveMessage {
   const copy = intentCopy[intent as keyof typeof intentCopy] ?? intentCopy.schedule;
   return {
     title: copy.title,
-    description: `Use o botão abaixo para ${copy.action}. O acesso é seguro e expira em 30 minutos.`,
+    description: `Use o botão abaixo para ${copy.action}. O acesso é seguro e expira em 24 horas.`,
     footer: "Luna Agenda",
     buttons: [{ type: "url", displayText: "Abrir minha agenda", url }],
     fallbackText: accessLinkMessage(url, intent),

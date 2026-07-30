@@ -171,16 +171,22 @@ describe("messaging", () => {
   });
   it("issues a fresh secure link deterministically when the previous link was lost", async () => {
     const updates: Record<string, unknown>[] = [];
+    const accessTokens: Record<string, unknown>[] = [];
     const db = { from: (table: string) => {
       if (table === "whatsapp_plan_triage_sessions") return { select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }) }) };
-      if (table === "access_tokens") return { insert: vi.fn().mockResolvedValue({ error: null }) };
+      if (table === "access_tokens") return { insert: vi.fn().mockImplementation(async (values: Record<string, unknown>) => { accessTokens.push(values); return { error: null }; }) };
       return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
     } };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
     const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    const issuedAt = Date.now();
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000044", phone: "5513999999999", message_text: "Perdi o link", attempts: 1 });
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/agenda\.example\/acesso#token=/));
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("expira em 24 horas"));
     expect(evolution.sendText).not.toHaveBeenCalledWith("5513999999999", expect.stringContaining("link.de.agendamento"));
+    const expiresAt = new Date(String(accessTokens[0]?.expires_at)).getTime();
+    expect(expiresAt).toBeGreaterThanOrEqual(issuedAt + 24 * 60 * 60_000);
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + 24 * 60 * 60_000);
     expect(updates).toContainEqual(expect.objectContaining({ classified_intent: "schedule", processed_action: "portal_link" }));
   });
   it("answers an existing appointment question without asking for a plan", async () => {
