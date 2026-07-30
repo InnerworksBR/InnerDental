@@ -1,4 +1,4 @@
-export type MessageIntent = "schedule" | "reschedule" | "cancel" | "confirm" | "insurance" | "procedure" | "faq" | "greeting" | "human";
+export type MessageIntent = "schedule" | "reschedule" | "cancel" | "confirm" | "appointment_status" | "treatment_status" | "insurance" | "procedure" | "faq" | "greeting" | "human" | "conversation";
 function normalized(value: string) { return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim(); }
 export function isExplicitHumanRequest(message: string): boolean {
   const text = normalized(message);
@@ -21,6 +21,21 @@ export function isProcedureBookingRequest(message: string): boolean {
     && /\b(fazer|realizar)\b/.test(text);
   return asksToBook || wantsProcedure;
 }
+export function isAppointmentStatusRequest(message: string): boolean {
+  const text = normalized(message);
+  const startsNewBooking = /\b(marcar|marca|marque|agendar|agenda|agende)\b/.test(text)
+    && /\b(quero|queria|gostaria|preciso|posso|poderia|nova|novo)\b/.test(text);
+  if (startsNewBooking) return false;
+  const mentionsExistingAppointment = /\b(consulta|retorno|agendamento|horario)\b/.test(text);
+  const asksForSchedule = /\b(quando|que dia|qual dia|que horas|qual horario|pra quando|para quando|ficou marcad[ao]|esta marcad[ao]|proxim[ao] consulta|minha consulta|meu retorno|gerenciar consulta|ver (?:minha )?consulta|consultar agendamento|minha agenda)\b/.test(text);
+  return mentionsExistingAppointment && asksForSchedule;
+}
+export function isTreatmentStatusRequest(message: string): boolean {
+  const text = normalized(message);
+  const mentionsOngoingTreatment = /\b(protese|proteses|aparelho|molde|laboratorio|tratamento|peca|pecas)\b/.test(text);
+  const asksForProgress = /\b(pront[ao]s?|ficaria[m]? pront[ao]s?|andamento|previsao|prazo|entrega|chegou|chegar|resultado|termina|terminar|finaliza|finalizar)\b/.test(text);
+  return mentionsOngoingTreatment && asksForProgress;
+}
 export function classifyIntent(message: string): MessageIntent {
   const text = normalized(message);
   if (text === "menu.agenda") return "schedule";
@@ -30,6 +45,9 @@ export function classifyIntent(message: string): MessageIntent {
   if (text === "menu.handoff") return "human";
   if (text === "appointment.confirm") return "confirm";
   if (/^(oi|ola|bom dia|boa tarde|boa noite|tudo bem|obrigad[oa]|obg)[!,. ]*$/.test(text)) return "greeting";
+  if (isExplicitHumanRequest(message)) return "human";
+  if (isAppointmentStatusRequest(message)) return "appointment_status";
+  if (isTreatmentStatusRequest(message)) return "treatment_status";
   if (/\b(remarcar|reagendar|mudar.*horario)\b/.test(text)) return "reschedule";
   if (/\b(cancelar|desmarcar)\b/.test(text)) return "cancel";
   if (/\b(confirmo|confirmar(?: minha)? presenca|vou comparecer|estarei presente)\b/.test(text)) return "confirm";
@@ -38,5 +56,5 @@ export function classifyIntent(message: string): MessageIntent {
   if (/\b(marcar|marca|marque|agendar|agenda|agende|consulta|horario)\b/.test(text)) return "schedule";
   if (/\b(plano|convenio|aceit\w*|cobertura)\b/.test(text)) return "insurance";
   if (/\b(como|quando|onde|duvida|pergunta)\b/.test(text)) return "faq";
-  return "human";
+  return "conversation";
 }

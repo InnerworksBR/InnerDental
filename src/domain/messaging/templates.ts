@@ -132,6 +132,27 @@ export function attendanceConfirmationReplyMessage(status: "confirmed" | "alread
   return `*Confirmação de presença*\n\nNão encontrei uma consulta próxima aguardando sua confirmação.${link}`;
 }
 
+export function upcomingAppointmentInteractiveMessage(status: "found" | "not_found", accessUrl: string, startAt?: string, professionalName?: string): InteractiveMessage {
+  if (status === "found" && startAt) {
+    const { day, time } = appointmentDate(startAt);
+    const professional = professionalName ? `\n👤 ${professionalName}` : "";
+    return {
+      title: "📅 Próxima consulta",
+      description: `${day}, às ${time}.${professional}`,
+      footer: "Luna Agenda",
+      buttons: [{ type: "url", displayText: "Gerenciar consulta", url: accessUrl }],
+      fallbackText: `📅 *Sua próxima consulta*\n\n${day}, às ${time}.${professional}\n\nPara consultar ou alterar o agendamento:\n${accessUrl}`,
+    };
+  }
+  return {
+    title: "Consulta não localizada",
+    description: "Não encontrei uma consulta futura vinculada a este número.",
+    footer: "Confira sua agenda ou escolha um novo horário.",
+    buttons: [{ type: "url", displayText: "Abrir minha agenda", url: accessUrl }],
+    fallbackText: `Não encontrei uma consulta futura vinculada a este número. Você pode conferir sua agenda ou escolher um novo horário aqui:\n${accessUrl}`,
+  };
+}
+
 export type DailyConfirmationSummary = {
   summary_date: string;
   total: number;
@@ -183,9 +204,9 @@ export const questionsInteractiveMessage: InteractiveMessage = {
 };
 
 export const insurancePromptMessage = "Qual é o nome do plano que você gostaria de consultar?";
-export const initialInsurancePromptMessage = "Olá! Antes de qualquer coisa, qual é o seu plano odontológico?";
-export const unsupportedInsuranceMessage = "No momento, esse plano não está entre os planos atendidos pela Dra. Tarcília. Agradecemos o contato.";
-export const caixaInsuranceMessage = "Esse plano não é mais atendido pela Dra. Tarcília. Agradecemos o contato.";
+export const initialInsurancePromptMessage = "Para continuar com o agendamento, qual é o seu plano odontológico? Se o atendimento for particular, responda *Particular*.";
+export const unsupportedInsuranceMessage = "Esse plano não está entre os planos atendidos pela clínica no momento. Se o nome foi informado incorretamente, envie o plano correto. Para outros assuntos, pode me dizer como posso ajudar.";
+export const caixaInsuranceMessage = "Os planos que possuem “Caixa” no nome não são mais atendidos pela clínica. Se você já está em tratamento ou precisa tratar de uma consulta existente, explique o que precisa para direcionarmos corretamente.";
 export const procedurePromptMessage = "Qual procedimento você gostaria de consultar?";
 
 export const unsupportedMediaInteractiveMessage: InteractiveMessage = {
@@ -196,18 +217,16 @@ export const unsupportedMediaInteractiveMessage: InteractiveMessage = {
   fallbackText: "Ainda não consigo ouvir áudios ou interpretar arquivos por aqui. Por favor, escreva sua dúvida em uma mensagem ou peça para falar com a equipe.",
 };
 
-export const humanFallbackMessage = "Entendi. Já encaminhei sua mensagem para a equipe de atendimento. Uma pessoa continuará a conversa por aqui no horário de atendimento.";
+export const humanFallbackMessage = "Entendi. Encaminhei sua solicitação com o contexto para a equipe responsável, que continuará o atendimento por aqui assim que estiver disponível.";
+export const treatmentStatusHandoffMessage = "Entendi que você quer confirmar o andamento do seu tratamento. Encaminhei a solicitação para a equipe responsável verificar e continuar o atendimento por aqui.";
 
 export function knowledgeAnswerInteractiveMessage(answer: string): InteractiveMessage {
   return {
     title: "Informação da clínica",
     description: answer,
-    footer: "Posso ajudar no próximo passo.",
-    buttons: [
-      { type: "reply", id: menuActions.agenda, displayText: "Agendar avaliação" },
-      { type: "reply", id: menuActions.handoff, displayText: "Falar com equipe" },
-    ],
-    fallbackText: `${answer}\n\nSe quiser, você também pode pedir para agendar uma avaliação ou falar com a equipe.`,
+    footer: "Luna Agenda",
+    buttons: [{ type: "reply", id: menuActions.questions, displayText: "Outra dúvida" }],
+    fallbackText: answer,
   };
 }
 
@@ -227,5 +246,7 @@ export function isAutomatedReplyEcho(text: string) {
     || value.startsWith("✅ *Presença já confirmada*")
     || value.startsWith("*Confirmação de presença*")
     || value.startsWith("📋 *Confirmações de hoje*")
+    || value.startsWith("📅 *Sua próxima consulta*")
+    || value.startsWith("Não encontrei uma consulta futura")
     || value.startsWith("*Seu código de acesso*");
 }

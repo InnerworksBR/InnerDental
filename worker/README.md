@@ -24,9 +24,15 @@ O worker lê os próximos oito dias do Calendar a cada `WORKER_CALENDAR_SYNC_INT
 
 `EVOLUTION_INTERACTIVE_MESSAGES=true` habilita botões nativos. Enquanto estiver `false`, ou se o endpoint interativo falhar, o worker envia o mesmo conteúdo como texto. Antes de habilitar, valide a versão/integração da Evolution e teste respostas de botão em Android, iOS, WhatsApp Web e Desktop.
 
+## Atendimento contextual
+
+O plano odontológico é solicitado somente para um novo agendamento quando o paciente ainda não possui plano ativo cadastrado. Endereço, procedimentos, consultas existentes, remarcação, cancelamento e acompanhamento de tratamento não passam por essa barreira. Perguntas sobre a próxima consulta usam `get_upcoming_appointment_by_phone`; andamento de prótese ou tratamento é encaminhado com contexto para a equipe.
+
+Quando uma pessoa da equipe envia uma mensagem pelo WhatsApp conectado, a automação é pausada por duas horas para aquele telefone. A pausa cancela mensagens ainda pendentes e o worker verifica novamente o estado imediatamente antes de responder, evitando que uma mensagem já reivindicada interrompa o atendimento humano.
+
 Cada claim novo recebe `lease_token`, `lease_owner` e expiração. A conclusão exige o token vigente; uma instância atrasada não sobrescreve o trabalho de outra. `WORKER_CONCURRENCY` limita o paralelismo local e `WORKER_LEASE_SECONDS` deve permanecer entre 30 e 900 segundos. Após seis tentativas, o item recebe `dead_lettered_at`, sai do retry automático e permanece visível no painel interno.
 
-Rollout compatível: aplicar `202607230012_message_leases.sql`, `202607270015_handoff_notifications.sql`, `202607270016_appointment_confirmations.sql` e `202607270017_direct_calendar_appointments.sql`; configurar o telefone da doutora, as credenciais Google e os intervalos; confirmar as RPCs e somente então promover o worker. Para rollback, parar o worker novo e retornar ao digest anterior; o schema aditivo e todas as mensagens permanecem preservados.
+Rollout compatível: aplicar todas as migrations pendentes em ordem, terminando em `202607300023_professional_whatsapp_conversations.sql`; confirmar `get_upcoming_appointment_by_phone`, `is_whatsapp_conversation_paused` e as funções de lease; somente então promover o web e o worker. Para rollback, parar o worker novo e retornar ao digest anterior; o schema é aditivo e todas as mensagens permanecem preservadas.
 
 ## Rollback
 

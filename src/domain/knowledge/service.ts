@@ -22,6 +22,16 @@ function planAnswer(value: string) {
     .trim();
 }
 
+function samePlanTerm(left: string, right: string) {
+  return left === right || left.replace(/\s+/g, "") === right.replace(/\s+/g, "");
+}
+
+function containsPlanTerm(left: string, right: string) {
+  const compactLeft = left.replace(/\s+/g, "");
+  const compactRight = right.replace(/\s+/g, "");
+  return left.includes(right) || right.includes(left) || compactLeft.includes(compactRight) || compactRight.includes(compactLeft);
+}
+
 export function triageInsurancePlan(message: string, data: Pick<KnowledgeData, "plans" | "aliases">): InsurancePlanTriageResult {
   const answer = planAnswer(message);
   if (/\bcaixa\b/.test(answer)) return { kind: "caixa" };
@@ -29,10 +39,10 @@ export function triageInsurancePlan(message: string, data: Pick<KnowledgeData, "
   if (["dental", "odonto", "plano", "convenio", "saude"].includes(answer)) return { kind: "unsupported" };
 
   const canonicalCandidates = data.plans.map((plan) => ({ term: normalize(plan.name), plan }));
-  const canonicalExact = canonicalCandidates.find((candidate) => candidate.term === answer);
+  const canonicalExact = canonicalCandidates.find((candidate) => samePlanTerm(candidate.term, answer));
   if (canonicalExact) return { kind: "accepted", plan: canonicalExact.plan };
 
-  const canonicalPartial = canonicalCandidates.filter((candidate) => candidate.term.includes(answer) || answer.includes(candidate.term));
+  const canonicalPartial = canonicalCandidates.filter((candidate) => containsPlanTerm(candidate.term, answer));
   const canonicalPlanIds = [...new Set(canonicalPartial.map((candidate) => candidate.plan.id))];
   if (canonicalPlanIds.length === 1) return { kind: "accepted", plan: canonicalPartial[0].plan };
   if (canonicalPlanIds.length > 1) return { kind: "unsupported" };
@@ -41,10 +51,10 @@ export function triageInsurancePlan(message: string, data: Pick<KnowledgeData, "
     const plan = data.plans.find((entry) => entry.id === alias.insurance_plan_id);
     return plan ? [{ term: normalize(alias.alias), plan }] : [];
   });
-  const aliasExact = aliasCandidates.find((candidate) => candidate.term === answer);
+  const aliasExact = aliasCandidates.find((candidate) => samePlanTerm(candidate.term, answer));
   if (aliasExact) return { kind: "accepted", plan: aliasExact.plan };
 
-  const aliasPartial = aliasCandidates.filter((candidate) => candidate.term.includes(answer) || answer.includes(candidate.term));
+  const aliasPartial = aliasCandidates.filter((candidate) => containsPlanTerm(candidate.term, answer));
   const aliasPlanIds = [...new Set(aliasPartial.map((candidate) => candidate.plan.id))];
   if (aliasPlanIds.length !== 1) return { kind: "unsupported" };
   return { kind: "accepted", plan: aliasPartial[0].plan };

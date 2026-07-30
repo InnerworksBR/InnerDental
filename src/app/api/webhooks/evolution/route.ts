@@ -22,7 +22,7 @@ export async function POST(request: Request) {
         p_external_id: fromMe.externalId,
         p_phone: fromMe.phone,
         p_message_fingerprint: fromMe.text ? whatsappMessageFingerprint(fromMe.phone, fromMe.text) : null,
-        p_pause_minutes: 20,
+        p_pause_minutes: 120,
       });
       if (error) throw error;
       log("info", "whatsapp_from_me_processed", { correlationId, disposition });

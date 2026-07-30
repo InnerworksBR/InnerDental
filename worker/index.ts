@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { EvolutionClient } from "../src/integrations/evolution/client.ts";
 import { decryptOtp } from "../src/lib/messaging/otp-cipher.ts";
-import { classifyIntent, isClinicalQuestion, isExplicitHumanRequest, isProcedureBookingRequest } from "../src/domain/messaging/intent.ts";
+import { classifyIntent, isClinicalQuestion, isExplicitHumanRequest, isProcedureBookingRequest, type MessageIntent } from "../src/domain/messaging/intent.ts";
 import { whatsappMessageFingerprint } from "../src/domain/messaging/fingerprint.ts";
 import { handoffNotificationMessage, handoffReason } from "../src/domain/messaging/handoff.ts";
 import {
@@ -12,6 +12,7 @@ import {
   appointmentConfirmationRequestInteractiveMessage,
   appointmentInteractiveMessage,
   attendanceConfirmationReplyMessage,
+  upcomingAppointmentInteractiveMessage,
   dailyConfirmationSummaryMessage,
   greetingInteractiveMessage,
   humanFallbackMessage,
@@ -25,6 +26,7 @@ import {
   questionsInteractiveMessage,
   unsupportedInsuranceMessage,
   unsupportedMediaInteractiveMessage,
+  treatmentStatusHandoffMessage,
   type InteractiveMessage,
   type DailyConfirmationSummary,
 } from "../src/domain/messaging/templates.ts";
@@ -45,9 +47,8 @@ type InboxRow = { id: string; phone: string; message_text: string; attempts: num
 type PlanTriageSession = { status: "awaiting_plan" | "accepted" | "rejected"; pending_message: string; prompted_by_inbox_id: string; expires_at: string };
 type PlanTriageDecision =
   | { kind: "continue" }
-  | { kind: "resume"; message: string; planId: string }
-  | { kind: "reply"; message: string; action: "plan_requested" | "plan_rejected" | "plan_rejected_caixa"; rejectedSession?: Pick<PlanTriageSession, "pending_message" | "prompted_by_inbox_id"> }
-  | { kind: "closed" };
+  | { kind: "resume"; message: string; planId: string; promptedByInboxId: string }
+  | { kind: "reply"; message: string; action: "plan_requested" | "plan_rejected" | "plan_rejected_caixa"; rejectedSession?: Pick<PlanTriageSession, "pending_message" | "prompted_by_inbox_id"> };
 type RecipientPolicy = "all" | "allowlist";
 type Config = { supabaseUrl: string; supabaseKey: string; evolutionBaseUrl: string; evolutionApiKey: string; evolutionInstance: string; otpSecret: string; portalBaseUrl: string; handoffNotificationPhone: string; dailySummaryHour?: number; googleCredentials?: GoogleServiceAccountCredentials; googleCalendarId?: string; calendarSyncIntervalMs?: number; openaiApiKey?: string; openaiModel: string; interactiveMessages?: boolean; recipientPolicy?: RecipientPolicy; pollMs: number; healthPort: number; workerId?: string; concurrency?: number; leaseSeconds?: number; allowedRecipients?: string[]; humanTakeoverPauseMinutes?: number; planTriageEnabled?: boolean };
 
@@ -76,7 +77,7 @@ export function loadWorkerConfig(): Config {
   if (!Number.isFinite(pollMs) || pollMs < 250 || !Number.isInteger(healthPort) || healthPort < 1 || healthPort > 65535 || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 20 || !Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) throw new Error("WORKER_INTERVAL_OR_PORT_INVALID");
   if (!Number.isInteger(dailySummaryHour) || dailySummaryHour < 0 || dailySummaryHour > 23) throw new Error("WORKER_DAILY_SUMMARY_HOUR_INVALID");
   if (!Number.isInteger(calendarSyncIntervalMs) || calendarSyncIntervalMs < 15_000 || calendarSyncIntervalMs > 3_600_000) throw new Error("WORKER_CALENDAR_SYNC_INTERVAL_MS_INVALID");
-  return { supabaseUrl: required("NEXT_PUBLIC_SUPABASE_URL"), supabaseKey: required("SUPABASE_SECRET_KEY"), evolutionBaseUrl: required("EVOLUTION_BASE_URL"), evolutionApiKey: required("EVOLUTION_API_KEY"), evolutionInstance: required("EVOLUTION_INSTANCE"), otpSecret, portalBaseUrl: portal.toString().replace(/\/$/, ""), handoffNotificationPhone, dailySummaryHour, googleCredentials, googleCalendarId: process.env.GOOGLE_CALENDAR_ID?.trim() || undefined, calendarSyncIntervalMs, openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined, openaiModel: process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini", interactiveMessages: booleanSetting("EVOLUTION_INTERACTIVE_MESSAGES"), recipientPolicy, pollMs, healthPort, workerId: process.env.WORKER_ID?.trim() || `worker-${randomUUID()}`, concurrency, leaseSeconds, allowedRecipients: [...new Set(allowedRecipients)], humanTakeoverPauseMinutes: 20, planTriageEnabled: true };
+  return { supabaseUrl: required("NEXT_PUBLIC_SUPABASE_URL"), supabaseKey: required("SUPABASE_SECRET_KEY"), evolutionBaseUrl: required("EVOLUTION_BASE_URL"), evolutionApiKey: required("EVOLUTION_API_KEY"), evolutionInstance: required("EVOLUTION_INSTANCE"), otpSecret, portalBaseUrl: portal.toString().replace(/\/$/, ""), handoffNotificationPhone, dailySummaryHour, googleCredentials, googleCalendarId: process.env.GOOGLE_CALENDAR_ID?.trim() || undefined, calendarSyncIntervalMs, openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined, openaiModel: process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini", interactiveMessages: booleanSetting("EVOLUTION_INTERACTIVE_MESSAGES"), recipientPolicy, pollMs, healthPort, workerId: process.env.WORKER_ID?.trim() || `worker-${randomUUID()}`, concurrency, leaseSeconds, allowedRecipients: [...new Set(allowedRecipients)], humanTakeoverPauseMinutes: 120, planTriageEnabled: true };
 }
 const opaqueToken = () => randomBytes(32).toString("base64url");
 const tokenHash = (token: string) => createHash("sha256").update(token, "utf8").digest("hex");
@@ -269,33 +270,90 @@ export class MessagingWorker {
     const { error } = await this.db.from("whatsapp_plan_triage_sessions").upsert({ phone, ...values }, { onConflict: "phone" });
     if (error) throw new Error("PLAN_TRIAGE_STATE_FAILED");
   }
-  private async preparePlanTriage(row: InboxRow): Promise<PlanTriageDecision> {
+  private requiresPlanTriage(intent: MessageIntent, message: string) {
+    return (intent === "schedule" && message !== menuActions.agenda)
+      || (intent === "procedure" && isProcedureBookingRequest(message));
+  }
+  private likelyPlanAnswer(message: string) {
+    const value = message.trim();
+    const words = value.split(/\s+/).filter(Boolean);
+    return value.length <= 80
+      && words.length <= 6
+      && !value.startsWith("menu.")
+      && !/[?]/.test(value)
+      && !/\b(depende|sim|nao|não|talvez|horas?|hrs?|chegar|compromisso|consulta|retorno|marcar|agendar|remarcar|cancelar)\b/i.test(value);
+  }
+  private async patientHasActivePlan(phone: string) {
+    const { data: patient, error: patientError } = await this.db.from("patients").select("insurance_plan_id").eq("phone", phone).maybeSingle();
+    if (patientError) throw new Error("PATIENT_PLAN_LOOKUP_FAILED");
+    const planId = (patient as { insurance_plan_id?: string | null } | null)?.insurance_plan_id;
+    if (!planId) return false;
+    const { data: plan, error: planError } = await this.db.from("insurance_plans").select("name,active").eq("id", planId).maybeSingle();
+    if (planError) throw new Error("PATIENT_PLAN_LOOKUP_FAILED");
+    return Boolean((plan as { name?: string; active?: boolean } | null)?.active && !/\bcaixa\b/i.test((plan as { name?: string } | null)?.name ?? ""));
+  }
+  private async preparePlanTriage(row: InboxRow, intent: MessageIntent, message: string): Promise<PlanTriageDecision> {
     if (!this.config.planTriageEnabled) return { kind: "continue" };
     const { data, error } = await this.db.from("whatsapp_plan_triage_sessions").select("status,pending_message,prompted_by_inbox_id,expires_at").eq("phone", row.phone).maybeSingle();
     if (error) throw new Error("PLAN_TRIAGE_LOOKUP_FAILED");
     const session = data as PlanTriageSession | null;
-    if (!session || new Date(session.expires_at).getTime() <= Date.now()) {
-      await this.savePlanTriage(row.phone, { status: "awaiting_plan", pending_message: row.message_text, prompted_by_inbox_id: row.id, insurance_plan_id: null, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
+    const activeSession = session && new Date(session.expires_at).getTime() > Date.now() ? session : null;
+
+    if (activeSession?.status === "accepted") return { kind: "continue" };
+    if (activeSession?.status === "awaiting_plan" && activeSession.prompted_by_inbox_id === row.id) {
       return { kind: "reply", message: initialInsurancePromptMessage, action: "plan_requested" };
     }
-    if (session.status === "accepted") return { kind: "continue" };
-    if (session.status === "rejected") return { kind: "closed" };
-    if (session.prompted_by_inbox_id === row.id) return { kind: "reply", message: initialInsurancePromptMessage, action: "plan_requested" };
 
-    const knowledge = await this.loadKnowledge();
-    const result = triageInsurancePlan(row.message_text, knowledge);
-    if (result.kind === "caixa") {
-      return { kind: "reply", message: caixaInsuranceMessage, action: "plan_rejected_caixa", rejectedSession: session };
+    if (activeSession && ["awaiting_plan", "rejected"].includes(activeSession.status)) {
+      const knowledge = await this.loadKnowledge();
+      const result = triageInsurancePlan(message, knowledge);
+      const canBePlanAnswer = ["conversation", "insurance"].includes(intent);
+      if (result.kind === "accepted" && canBePlanAnswer) {
+        return { kind: "resume", message: activeSession.pending_message, planId: result.plan.id, promptedByInboxId: activeSession.prompted_by_inbox_id };
+      }
+      if (result.kind === "caixa" && canBePlanAnswer && this.likelyPlanAnswer(message)) {
+        return { kind: "reply", message: caixaInsuranceMessage, action: "plan_rejected_caixa", rejectedSession: activeSession };
+      }
+      if (activeSession.status === "awaiting_plan" && canBePlanAnswer && this.likelyPlanAnswer(message)) {
+        return { kind: "reply", message: unsupportedInsuranceMessage, action: "plan_rejected", rejectedSession: activeSession };
+      }
     }
-    if (result.kind === "unsupported") {
-      return { kind: "reply", message: unsupportedInsuranceMessage, action: "plan_rejected", rejectedSession: session };
-    }
-    return { kind: "resume", message: session.pending_message, planId: result.plan.id };
+
+    if (!this.requiresPlanTriage(intent, message)) return { kind: "continue" };
+    if (await this.patientHasActivePlan(row.phone)) return { kind: "continue" };
+
+    await this.savePlanTriage(row.phone, { status: "awaiting_plan", pending_message: message, prompted_by_inbox_id: row.id, insurance_plan_id: null, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
+    return { kind: "reply", message: initialInsurancePromptMessage, action: "plan_requested" };
   }
   private async acceptPlanTriage(phone: string, planId: string, pendingMessage: string, promptedByInboxId: string) {
     await this.savePlanTriage(phone, { status: "accepted", pending_message: pendingMessage, prompted_by_inbox_id: promptedByInboxId, insurance_plan_id: planId, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
     const { error } = await this.db.from("patients").upsert({ phone, insurance_plan_id: planId }, { onConflict: "phone" });
     if (error) throw new Error("PLAN_TRIAGE_PATIENT_UPDATE_FAILED");
+  }
+  private async ignoreIfConversationPaused(row: InboxRow, intent: MessageIntent) {
+    if (!this.config.humanTakeoverPauseMinutes) return false;
+    const { data, error } = await this.db.rpc("is_whatsapp_conversation_paused", { p_phone: row.phone });
+    if (error) throw new Error("CONVERSATION_PAUSE_LOOKUP_FAILED");
+    if (data !== true) return false;
+    await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: "agent_paused", classified_intent: intent, processed_action: "ignored" }, row.lease_token);
+    log("info", "inbox_ignored_during_human_takeover", { correlationId: row.id });
+    return true;
+  }
+  private async loadRecentConversation(phone: string, currentId: string) {
+    try {
+      const { data, error } = await this.db.from("whatsapp_inbox")
+        .select("message_text,classified_intent,processed_action")
+        .eq("phone", phone)
+        .neq("id", currentId)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (error) return [];
+      return ((data ?? []) as Array<{ message_text: string; classified_intent: string | null; processed_action: string | null }>)
+        .reverse()
+        .map((entry) => ({ message: entry.message_text.slice(0, 800), intent: entry.classified_intent, action: entry.processed_action }));
+    } catch {
+      return [];
+    }
   }
   async processInbox(row: InboxRow) {
     const startedAt = Date.now();
@@ -316,13 +374,10 @@ export class MessagingWorker {
       return;
     }
     try {
-      const triage = await this.preparePlanTriage(row);
-      if (triage.kind === "closed") {
-        await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: null, classified_intent: intent, processed_action: "ignored" }, row.lease_token);
-        log("info", "inbox_plan_triage_closed", { correlationId: row.id });
-        return;
-      }
+      if (await this.ignoreIfConversationPaused(row, intent)) return;
+      const triage = await this.preparePlanTriage(row, intent, messageText);
       if (triage.kind === "reply") {
+        if (await this.ignoreIfConversationPaused(row, intent)) return;
         await this.sendReply(row.phone, triage.message);
         if (triage.rejectedSession) {
           await this.savePlanTriage(row.phone, { status: "rejected", pending_message: triage.rejectedSession.pending_message, prompted_by_inbox_id: triage.rejectedSession.prompted_by_inbox_id, insurance_plan_id: null, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
@@ -332,7 +387,7 @@ export class MessagingWorker {
         log("info", "inbox_plan_triage_processed", { correlationId: row.id, action: triage.action, attempts: row.attempts, durationMs: Date.now() - startedAt });
         return;
       }
-      const acceptedPlan = triage.kind === "resume" ? { id: triage.planId, pendingMessage: triage.message } : null;
+      const acceptedPlan = triage.kind === "resume" ? { id: triage.planId, pendingMessage: triage.message, promptedByInboxId: triage.promptedByInboxId } : null;
       if (triage.kind === "resume") {
         messageText = triage.message;
         intent = classifyIntent(messageText);
@@ -354,6 +409,18 @@ export class MessagingWorker {
         reply = attendanceConfirmationReplyMessage(result.status, result.start_at, accessUrl);
         processedAction = result.status === "confirmed" ? "appointment_confirmed" : result.status === "already_confirmed" ? "appointment_already_confirmed" : `confirmation_${result.status}`;
       }
+      else if (intent === "appointment_status") {
+        const { data, error } = await this.db.rpc("get_upcoming_appointment_by_phone", { p_phone: row.phone });
+        const result = data as { status?: "found" | "not_found"; start_at?: string; professional_name?: string } | null;
+        if (error || !result?.status || !["found", "not_found"].includes(result.status)) throw new Error("APPOINTMENT_LOOKUP_FAILED");
+        const accessUrl = await this.createAccessUrl(row.phone);
+        reply = upcomingAppointmentInteractiveMessage(result.status, accessUrl, result.start_at, result.professional_name);
+        processedAction = result.status === "found" ? "appointment_lookup" : "appointment_not_found";
+      }
+      else if (intent === "treatment_status") {
+        reply = treatmentStatusHandoffMessage;
+        handoff = true;
+      }
       else if (requestedProcedure?.online_booking) {
         reply = accessLinkInteractiveMessage(await this.createAccessUrl(row.phone), "schedule");
         processedAction = "portal_link";
@@ -368,9 +435,10 @@ export class MessagingWorker {
       else {
         knowledge ??= await this.loadKnowledge();
         const structuredAnswer = findStructuredAnswer(messageText, knowledge);
+        const recentConversation = await this.loadRecentConversation(row.phone, row.id);
         if (this.config.openaiApiKey) {
           try {
-            const generated = await generateClinicReply({ apiKey: this.config.openaiApiKey, model: this.config.openaiModel, message: messageText, knowledge });
+            const generated = await generateClinicReply({ apiKey: this.config.openaiApiKey, model: this.config.openaiModel, message: messageText, knowledge, recentConversation });
             usedLlm = true;
             handoff = generated.handoffRequired;
             reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(generated.text);
@@ -380,22 +448,24 @@ export class MessagingWorker {
             usedFallback = !handoff && !structuredAnswer;
             reply = handoff
               ? humanFallbackMessage
-              : knowledgeAnswerInteractiveMessage(structuredAnswer ? `Claro! ${structuredAnswer}` : "Não consegui consultar essa informação agora. Pode tentar novamente em instantes?");
+              : knowledgeAnswerInteractiveMessage(structuredAnswer ? `Claro! ${structuredAnswer}` : "Para eu orientar corretamente, pode detalhar um pouco mais o que você precisa?");
           }
         } else {
           handoff = !structuredAnswer && isClinicalQuestion(messageText);
           usedFallback = !handoff && !structuredAnswer;
           reply = handoff
             ? humanFallbackMessage
-            : knowledgeAnswerInteractiveMessage(structuredAnswer ? `Claro! ${structuredAnswer}` : "Não consegui consultar essa informação agora. Pode tentar novamente em instantes?");
+            : knowledgeAnswerInteractiveMessage(structuredAnswer ? `Claro! ${structuredAnswer}` : "Para eu orientar corretamente, pode detalhar um pouco mais o que você precisa?");
         }
       }
+      if (await this.ignoreIfConversationPaused(row, intent)) return;
       if (handoff) {
         const { data: handoffId, error } = await this.db.rpc("enqueue_human_handoff", { p_inbox_id: row.id, p_phone: row.phone, p_reason: handoffReason(messageText) });
         if (error || !handoffId) throw new Error("HANDOFF_ENQUEUE_FAILED");
       }
+      if (await this.ignoreIfConversationPaused(row, intent)) return;
       await this.sendReply(row.phone, reply);
-      if (acceptedPlan) await this.acceptPlanTriage(row.phone, acceptedPlan.id, acceptedPlan.pendingMessage, row.id);
+      if (acceptedPlan) await this.acceptPlanTriage(row.phone, acceptedPlan.id, acceptedPlan.pendingMessage, acceptedPlan.promptedByInboxId);
       const action = processedAction ?? (handoff ? "handoff" : ["schedule", "reschedule", "cancel"].includes(intent) ? "portal_link" : usedLlm ? "llm_answer" : usedFallback ? "fallback_answer" : "structured_answer");
       await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: null, classified_intent: intent, processed_action: action }, row.lease_token);
       incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "inbox", result: handoff ? "handoff" : "answered" });
