@@ -177,7 +177,7 @@ export function dailyConfirmationSummaryMessage(summary: DailyConfirmationSummar
   return `${heading}\n\n${count}\n\n⏳ *Ainda não confirmaram:*\n${pending}`;
 }
 
-export const greetingMessage = "Olá! Sou a assistente virtual da Luna 😊\n\nComo posso ajudar?\n\n• Agendar ou gerenciar uma consulta\n• Tirar dúvidas sobre planos e procedimentos\n• Falar com a equipe\n\nVocê pode escrever sua dúvida ou escolher uma opção.";
+export const greetingMessage = "Olá! Como posso ajudar?";
 
 export const greetingInteractiveMessage: InteractiveMessage = {
   title: "Olá! Sou a assistente da Luna 😊",
@@ -200,25 +200,28 @@ export const questionsInteractiveMessage: InteractiveMessage = {
     { type: "reply", id: menuActions.procedures, displayText: "Procedimentos" },
     { type: "reply", id: menuActions.handoff, displayText: "Falar com equipe" },
   ],
-  fallbackText: "*Planos e procedimentos*\n\nQual informação você procura? Escreva o nome do plano ou do procedimento. Se preferir, peça para falar com a equipe.",
+  fallbackText: "Qual plano ou procedimento você quer consultar?",
 };
 
 export const insurancePromptMessage = "Qual é o nome do plano que você gostaria de consultar?";
-export const initialInsurancePromptMessage = "Para continuar com o agendamento, qual é o seu plano odontológico? Se o atendimento for particular, responda *Particular*.";
-export const unsupportedInsuranceMessage = "Esse plano não está entre os planos atendidos pela clínica no momento. Se o nome foi informado incorretamente, envie o plano correto. Para outros assuntos, pode me dizer como posso ajudar.";
-export const caixaInsuranceMessage = "Os planos que possuem “Caixa” no nome não são mais atendidos pela clínica. Se você já está em tratamento ou precisa tratar de uma consulta existente, explique o que precisa para direcionarmos corretamente.";
+export const initialInsurancePromptMessage = "Qual é o seu plano odontológico?";
+export function procedureInsurancePromptMessage(procedureName: string) {
+  return `Sim, realizamos ${procedureName.toLocaleLowerCase("pt-BR")}. Qual é o seu plano odontológico?`;
+}
+export const unsupportedInsuranceMessage = "Esse plano não é atendido pela clínica.";
+export const caixaInsuranceMessage = "Planos com “Caixa” no nome não são mais atendidos pela clínica.";
 export const procedurePromptMessage = "Qual procedimento você gostaria de consultar?";
 
 export const unsupportedMediaInteractiveMessage: InteractiveMessage = {
   title: "Não consegui ler essa mensagem",
-  description: "Ainda não consigo ouvir áudios ou interpretar arquivos por aqui. Por favor, escreva sua dúvida em uma mensagem.",
+  description: "Não consigo ler áudios ou arquivos. Escreva sua dúvida, por favor.",
   footer: "Se preferir, posso chamar a equipe.",
   buttons: [{ type: "reply", id: menuActions.handoff, displayText: "Falar com equipe" }],
-  fallbackText: "Ainda não consigo ouvir áudios ou interpretar arquivos por aqui. Por favor, escreva sua dúvida em uma mensagem ou peça para falar com a equipe.",
+  fallbackText: "Não consigo ler áudios ou arquivos. Escreva sua dúvida, por favor.",
 };
 
-export const humanFallbackMessage = "Entendi. Encaminhei sua solicitação com o contexto para a equipe responsável, que continuará o atendimento por aqui assim que estiver disponível.";
-export const treatmentStatusHandoffMessage = "Entendi que você quer confirmar o andamento do seu tratamento. Encaminhei a solicitação para a equipe responsável verificar e continuar o atendimento por aqui.";
+export const humanFallbackMessage = "Encaminhei sua mensagem para a equipe.";
+export const treatmentStatusHandoffMessage = "Encaminhei sua pergunta sobre o tratamento para a equipe.";
 
 export function knowledgeAnswerInteractiveMessage(answer: string): InteractiveMessage {
   return {
@@ -233,6 +236,7 @@ export function knowledgeAnswerInteractiveMessage(answer: string): InteractiveMe
 export function isAutomatedReplyEcho(text: string) {
   const value = text.trim();
   return value.startsWith("Olá! Sou a assistente")
+    || value.startsWith("Olá! Como posso ajudar?")
     || value.startsWith("*Agendar consulta*")
     || value.startsWith("*Remarcar consulta*")
     || value.startsWith("*Cancelar consulta*")

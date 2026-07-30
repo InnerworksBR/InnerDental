@@ -128,6 +128,7 @@ describe("messaging", () => {
     const request = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
     expect(request.instructions).toMatch(/Responda com autonomia a dúvidas administrativas:[\s\S]*endereço[\s\S]*procedimentos oferecidos/);
     expect(request.instructions).toContain("handoff_reason=clinical_question somente quando for necessária avaliação profissional");
+    expect(request.instructions).toContain("no máximo 2 frases curtas");
     expect(request.text.format.schema.properties.handoff_reason.enum).toEqual(["none", "clinical_question", "explicit_human_request"]);
   });
   it("rejects an URL invented by OpenAI", async () => {
@@ -171,9 +172,45 @@ describe("messaging", () => {
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
     const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000030", phone: "5513999999999", message_text: "quero marcar", attempts: 1 });
-    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/continuar com o agendamento[\s\S]*plano odontológico/i));
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", "Qual é o seu plano odontológico?");
     expect(sessions).toContainEqual(expect.objectContaining({ status: "awaiting_plan", pending_message: "quero marcar" }));
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "plan_requested" }));
+  });
+  it("uses a short procedure-plan-link flow without extra conversation", async () => {
+    let session: Record<string, unknown> | null = null;
+    const updates: Record<string, unknown>[] = [];
+    const accessTokenInsert = vi.fn().mockResolvedValue({ error: null });
+    const knowledgeTable = (data: unknown[] = []) => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data, error: null }) }) });
+    const db = { from: (table: string) => {
+      if (table === "whatsapp_plan_triage_sessions") return {
+        select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockImplementation(async () => ({ data: session, error: null })) }) }),
+        upsert: vi.fn().mockImplementation(async (values: Record<string, unknown>) => { session = values; return { error: null }; }),
+      };
+      if (table === "insurance_plans") return knowledgeTable([{ id: "plan-1", name: "Amil Dental", instructions: null }]);
+      if (table === "procedures") return knowledgeTable([{ name: "Limpeza", description: "Avaliação inicial.", online_booking: true }]);
+      if (["insurance_aliases", "faq_entries"].includes(table)) return knowledgeTable();
+      if (table === "patients") return {
+        select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }) }),
+        upsert: vi.fn().mockResolvedValue({ error: null }),
+      };
+      if (table === "access_tokens") return { insert: accessTokenInsert };
+      return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
+    } };
+    const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000045", phone: "5513999999999", message_text: "Bom dia. Vocês fazem limpeza?", attempts: 1 });
+    expect(evolution.sendText).toHaveBeenNthCalledWith(1, "5513999999999", "Sim, realizamos limpeza. Qual é o seu plano odontológico?");
+    expect(accessTokenInsert).not.toHaveBeenCalled();
+
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000046", phone: "5513999999999", message_text: "Nesse caso eu gostaria, sim. Quais dias estão disponíveis?", attempts: 1 });
+    expect(evolution.sendText).toHaveBeenNthCalledWith(2, "5513999999999", "Qual é o seu plano odontológico?");
+    expect(accessTokenInsert).not.toHaveBeenCalled();
+
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000047", phone: "5513999999999", message_text: "Amil Dental", attempts: 1 });
+    expect(evolution.sendText).toHaveBeenNthCalledWith(3, "5513999999999", expect.stringMatching(/agenda\.example\/acesso#token=/));
+    expect(accessTokenInsert).toHaveBeenCalledOnce();
+    expect(updates).toContainEqual(expect.objectContaining({ classified_intent: "procedure", processed_action: "portal_link" }));
   });
   it("issues a fresh secure link deterministically when the previous link was lost", async () => {
     const updates: Record<string, unknown>[] = [];
@@ -245,7 +282,7 @@ describe("messaging", () => {
     const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000042", phone: "5513999999999", message_text: "As próteses ficariam prontas até agosto, qual o andamento?", attempts: 1 });
     expect(rpc).toHaveBeenCalledWith("enqueue_human_handoff", expect.objectContaining({ p_phone: "5513999999999" }));
-    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("andamento do seu tratamento"));
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", "Encaminhei sua pergunta sobre o tratamento para a equipe.");
     expect(evolution.sendText).not.toHaveBeenCalledWith("5513999999999", expect.stringContaining("plano odontológico"));
     expect(updates).toContainEqual(expect.objectContaining({ classified_intent: "treatment_status", processed_action: "handoff" }));
   });
@@ -446,7 +483,7 @@ describe("messaging", () => {
     const worker = new MessagingWorker(db as never, evolution as never, { pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000013", phone: "5513999999999", message_text: "Qual é o endereço?", attempts: 1 });
     expect(rpc).not.toHaveBeenCalled();
-    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("detalhar um pouco mais"));
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", "Pode detalhar o que você precisa?");
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "fallback_answer" }));
   });
   it("delivers an idempotently queued handoff alert to the configured doctor number", async () => {

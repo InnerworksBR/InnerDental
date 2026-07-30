@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { EvolutionClient } from "../src/integrations/evolution/client.ts";
 import { decryptOtp } from "../src/lib/messaging/otp-cipher.ts";
-import { classifyIntent, isAccessLinkRequest, isClinicalQuestion, isExplicitHumanRequest, isProcedureBookingRequest, type MessageIntent } from "../src/domain/messaging/intent.ts";
+import { classifyIntent, isAccessLinkRequest, isClinicalQuestion, isExplicitHumanRequest, type MessageIntent } from "../src/domain/messaging/intent.ts";
 import { whatsappMessageFingerprint } from "../src/domain/messaging/fingerprint.ts";
 import { handoffNotificationMessage, handoffReason } from "../src/domain/messaging/handoff.ts";
 import {
@@ -22,6 +22,7 @@ import {
   knowledgeAnswerInteractiveMessage,
   menuActions,
   otpMessage,
+  procedureInsurancePromptMessage,
   procedurePromptMessage,
   questionsInteractiveMessage,
   unsupportedInsuranceMessage,
@@ -273,8 +274,8 @@ export class MessagingWorker {
     if (error) throw new Error("PLAN_TRIAGE_STATE_FAILED");
   }
   private requiresPlanTriage(intent: MessageIntent, message: string) {
-    return (intent === "schedule" && message !== menuActions.agenda && !isAccessLinkRequest(message))
-      || (intent === "procedure" && isProcedureBookingRequest(message));
+    return (intent === "schedule" && !isAccessLinkRequest(message))
+      || intent === "procedure";
   }
   private likelyPlanAnswer(message: string) {
     const value = message.trim();
@@ -319,13 +320,22 @@ export class MessagingWorker {
       if (activeSession.status === "awaiting_plan" && canBePlanAnswer && this.likelyPlanAnswer(message)) {
         return { kind: "reply", message: unsupportedInsuranceMessage, action: "plan_rejected", rejectedSession: activeSession };
       }
+      if (activeSession.status === "awaiting_plan" && !["human", "appointment_status", "treatment_status"].includes(intent)) {
+        return { kind: "reply", message: initialInsurancePromptMessage, action: "plan_requested" };
+      }
     }
 
     if (!this.requiresPlanTriage(intent, message)) return { kind: "continue" };
+    let prompt = initialInsurancePromptMessage;
+    if (intent === "procedure") {
+      const requestedProcedure = findRequestedProcedure(message, await this.loadKnowledge());
+      if (!requestedProcedure?.online_booking) return { kind: "continue" };
+      prompt = procedureInsurancePromptMessage(requestedProcedure.name);
+    }
     if (await this.patientHasActivePlan(row.phone)) return { kind: "continue" };
 
     await this.savePlanTriage(row.phone, { status: "awaiting_plan", pending_message: message, prompted_by_inbox_id: row.id, insurance_plan_id: null, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
-    return { kind: "reply", message: initialInsurancePromptMessage, action: "plan_requested" };
+    return { kind: "reply", message: prompt, action: "plan_requested" };
   }
   private async acceptPlanTriage(phone: string, planId: string, pendingMessage: string, promptedByInboxId: string) {
     await this.savePlanTriage(phone, { status: "accepted", pending_message: pendingMessage, prompted_by_inbox_id: promptedByInboxId, insurance_plan_id: planId, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
@@ -401,7 +411,7 @@ export class MessagingWorker {
       let usedFallback = false;
       let processedAction: string | undefined;
       let knowledge: KnowledgeData | undefined;
-      const requestedProcedure = intent === "procedure" && isProcedureBookingRequest(messageText)
+      const requestedProcedure = intent === "procedure"
         ? findRequestedProcedure(messageText, knowledge = await this.loadKnowledge())
         : null;
       if (intent === "confirm") {
@@ -451,14 +461,14 @@ export class MessagingWorker {
             usedFallback = !handoff && !structuredAnswer;
             reply = handoff
               ? humanFallbackMessage
-              : knowledgeAnswerInteractiveMessage(structuredAnswer ? `Claro! ${structuredAnswer}` : "Para eu orientar corretamente, pode detalhar um pouco mais o que você precisa?");
+              : knowledgeAnswerInteractiveMessage(structuredAnswer ?? "Pode detalhar o que você precisa?");
           }
         } else {
           handoff = !structuredAnswer && isClinicalQuestion(messageText);
           usedFallback = !handoff && !structuredAnswer;
           reply = handoff
             ? humanFallbackMessage
-            : knowledgeAnswerInteractiveMessage(structuredAnswer ? `Claro! ${structuredAnswer}` : "Para eu orientar corretamente, pode detalhar um pouco mais o que você precisa?");
+            : knowledgeAnswerInteractiveMessage(structuredAnswer ?? "Pode detalhar o que você precisa?");
         }
       }
       if (await this.ignoreIfConversationPaused(row, intent)) return;
