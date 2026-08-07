@@ -284,7 +284,7 @@ export class MessagingWorker {
       && words.length <= 6
       && !value.startsWith("menu.")
       && !/[?]/.test(value)
-      && !/\b(depende|sim|nao|não|talvez|horas?|hrs?|chegar|compromisso|consulta|retorno|marcar|agendar|remarcar|cancelar)\b/i.test(value);
+      && !/\b(depende|horas?|hrs?|chegar|compromisso|consulta|retorno|marcar|agendar|remarcar|cancelar)\b/i.test(value);
   }
   private async patientHasActivePlan(phone: string) {
     const { data: patient, error: patientError } = await this.db.from("patients").select("insurance_plan_id").eq("phone", phone).maybeSingle();
@@ -293,7 +293,7 @@ export class MessagingWorker {
     if (!planId) return false;
     const { data: plan, error: planError } = await this.db.from("insurance_plans").select("name,active").eq("id", planId).maybeSingle();
     if (planError) throw new Error("PATIENT_PLAN_LOOKUP_FAILED");
-    return Boolean((plan as { name?: string; active?: boolean } | null)?.active && !/\bcaixa\b/i.test((plan as { name?: string } | null)?.name ?? ""));
+    return Boolean((plan as { name?: string; active?: boolean } | null)?.active);
   }
   private async preparePlanTriage(row: InboxRow, intent: MessageIntent, message: string): Promise<PlanTriageDecision> {
     if (!this.config.planTriageEnabled) return { kind: "continue" };
@@ -310,7 +310,7 @@ export class MessagingWorker {
     if (activeSession && ["awaiting_plan", "rejected"].includes(activeSession.status)) {
       const knowledge = await this.loadKnowledge();
       const result = triageInsurancePlan(message, knowledge);
-      const canBePlanAnswer = ["conversation", "insurance"].includes(intent);
+      const canBePlanAnswer = ["conversation", "insurance"].includes(intent) || this.likelyPlanAnswer(message);
       if (result.kind === "accepted" && canBePlanAnswer) {
         return { kind: "resume", message: activeSession.pending_message, planId: result.plan.id, promptedByInboxId: activeSession.prompted_by_inbox_id };
       }
@@ -338,8 +338,9 @@ export class MessagingWorker {
     return { kind: "reply", message: prompt, action: "plan_requested" };
   }
   private async acceptPlanTriage(phone: string, planId: string, pendingMessage: string, promptedByInboxId: string) {
-    await this.savePlanTriage(phone, { status: "accepted", pending_message: pendingMessage, prompted_by_inbox_id: promptedByInboxId, insurance_plan_id: planId, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
-    const { error } = await this.db.from("patients").upsert({ phone, insurance_plan_id: planId }, { onConflict: "phone" });
+    const effectivePlanId = planId === "particular" ? null : planId;
+    await this.savePlanTriage(phone, { status: "accepted", pending_message: pendingMessage, prompted_by_inbox_id: promptedByInboxId, insurance_plan_id: effectivePlanId, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
+    const { error } = await this.db.from("patients").upsert({ phone, insurance_plan_id: effectivePlanId }, { onConflict: "phone" });
     if (error) throw new Error("PLAN_TRIAGE_PATIENT_UPDATE_FAILED");
   }
   private async ignoreIfConversationPaused(row: InboxRow, intent: MessageIntent) {
