@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getGoogleCalendarAccessToken } from "@/integrations/google-calendar/auth";
+import { EvolutionClient } from "@/integrations/evolution/client";
 import { openAIReady } from "@/integrations/openai/readiness";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { log } from "@/lib/observability/logger";
@@ -27,20 +28,23 @@ function portalReady(environment: NodeJS.ProcessEnv = process.env) {
   } catch { return false; }
 }
 
-function evolutionReady(environment: NodeJS.ProcessEnv = process.env) {
+async function evolutionReady(environment: NodeJS.ProcessEnv = process.env) {
   try {
     const url = new URL(environment.EVOLUTION_BASE_URL ?? "");
-    return ["http:", "https:"].includes(url.protocol) && Boolean(environment.EVOLUTION_API_KEY?.trim() && environment.EVOLUTION_INSTANCE?.trim());
+    const apiKey = environment.EVOLUTION_API_KEY?.trim();
+    const instance = environment.EVOLUTION_INSTANCE?.trim();
+    if (!["http:", "https:"].includes(url.protocol) || !apiKey || !instance) return false;
+    return (await new EvolutionClient({ baseUrl: url.toString(), apiKey, instance }).connectionState()) === "open";
   } catch { return false; }
 }
 
 export async function GET() {
-  const [database, calendar, openai] = await Promise.all([databaseReady(), calendarReady(), openAIReady()]);
+  const [database, calendar, openai, evolution] = await Promise.all([databaseReady(), calendarReady(), openAIReady(), evolutionReady()]);
   const dependencies = {
     database: database ? "ok" : "unavailable",
     calendar: calendar ? "ok" : "unavailable",
     openai: openai ? "ok" : "unavailable",
-    evolution: evolutionReady() ? "configured" : "unavailable",
+    evolution: evolution ? "ok" : "unavailable",
     otpEncryption: (process.env.OTP_ENCRYPTION_SECRET?.length ?? 0) >= 32 ? "configured" : "unavailable",
     portal: portalReady() ? "configured" : "unavailable",
   };

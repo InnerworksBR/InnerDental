@@ -47,7 +47,7 @@ Antes do rollout, execute `pnpm config:verify` com a configuração de runtime i
 O gate HTTP mínimo pode ser executado com `SMOKE_BASE_URL=https://<host> pnpm smoke:deployment`; ele exige liveness e readiness 200.
 
 1. Exige aprovação específica do ambiente imediatamente antes da ação.
-2. Implantar web; esperar liveness saudável e readiness 200.
+2. Implantar web; esperar liveness saudável e readiness 200, incluindo a instância `EVOLUTION_INSTANCE` em estado `open`.
 3. Implantar worker; esperar health saudável e confirmar um ciclo de polling sem falha.
 4. Executar smoke: página inicial, `/acesso`, disponibilidade autenticada, criação controlada, confirmação pendente/processada e correlação nos logs.
 5. Observar por 15 minutos: 5xx, readiness, falhas do worker e latência p95.

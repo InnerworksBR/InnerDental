@@ -5,12 +5,14 @@
 | Pergunta operacional | Sinal | Dimensões permitidas | Ação |
 |---|---|---|---|
 | O portal está atendendo? | `GET /api/health/live` | serviço | reiniciar somente se o processo não responder |
-| É seguro receber novos agendamentos? | `GET /api/health/ready` | database, calendar | bloquear rollout e consultar integrações |
+| É seguro receber novos agendamentos? | `GET /api/health/ready` | database, calendar, openai, evolution, portal | bloquear rollout e consultar integrações |
 | O worker está consumindo filas? | `GET /health` do worker e `luna_worker_messages_total` | queue, result | verificar Supabase e Evolution |
 | Há repetição de falhas? | `luna_worker_failures_total` e eventos JSON `*_failed` | queue/evento | seguir runbook de incidente; não registrar payload |
 | O tráfego mudou? | `luna_http_requests_total` | method, area | comparar com baseline de homologação |
 
 Todas as dimensões são de cardinalidade limitada. IDs de correlação podem aparecer somente em logs, nunca como label de métrica.
+
+O evento `inbox_message_processed` inclui `factResolution`, `factSource` e `groundingResult` para reconstruir a decisão (`resolved`, `not_found`, `ambiguous_plan`, `price_unavailable`; fonte `faq`, `plan`, `procedure` ou `coverage`; resultado `accepted`, `fallback`, `disabled` ou `not_used`). Esses campos não incluem texto do paciente, resposta, telefone, payload ou segredo.
 
 ## Segurança e acesso
 
@@ -34,7 +36,7 @@ Os valores são proposta até existir baseline de homologação. Não são SLOs 
 
 ## Alertas propostos
 
-- readiness 503 por 3 verificações: impacto em novas marcações; runbook `docs/runbooks/deploy-easypanel.md`.
+- readiness 503 por 3 verificações: impacto em novas marcações; confirmar também se a instância Evolution configurada está `open`; runbook `docs/runbooks/deploy-easypanel.md`.
 - worker unhealthy por 3 verificações ou falhas crescentes por 5 min: impacto em confirmação/OTP; runbook `docs/runbooks/incident-response.md`.
 - p95 acima de 3 s por 10 min: impacto em disponibilidade; confirmar Calendar antes de escalar.
 

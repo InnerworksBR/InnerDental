@@ -15,6 +15,23 @@ export class EvolutionClient {
   private readonly fetcher: typeof fetch;
   constructor(config: { baseUrl: string; apiKey: string; instance: string }, fetcher: typeof fetch = fetch) { this.config = config; this.fetcher = fetcher; }
 
+  async connectionState(): Promise<"open" | "closed" | "unknown"> {
+    try {
+      const response = await this.fetcher(`${this.config.baseUrl.replace(/\/$/, "")}/instance/connectionState/${encodeURIComponent(this.config.instance)}`, {
+        headers: { apikey: this.config.apiKey }, signal: AbortSignal.timeout(5_000),
+      });
+      if (!response.ok) throw new EvolutionApiError(`EVOLUTION_${response.status}`, response.status === 429 || response.status >= 500);
+      const payload = await response.json() as { instance?: { state?: unknown }; state?: unknown };
+      const state = typeof payload.instance?.state === "string" ? payload.instance.state : typeof payload.state === "string" ? payload.state : "";
+      if (state.toLowerCase() === "open") return "open";
+      if (state) return "closed";
+      return "unknown";
+    } catch (error) {
+      if (error instanceof EvolutionApiError) throw error;
+      throw new EvolutionApiError("EVOLUTION_UNAVAILABLE", true);
+    }
+  }
+
   private async post(path: string, body: Record<string, unknown>): Promise<void> {
     await withBoundedRetry(async () => {
       try {

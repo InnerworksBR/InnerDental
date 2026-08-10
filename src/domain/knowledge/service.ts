@@ -1,7 +1,8 @@
 export type KnowledgeData = {
   plans: Array<{ id: string; name: string; instructions: string | null }>;
   aliases: Array<{ alias: string; insurance_plan_id: string }>;
-  procedures: Array<{ name: string; description: string | null; online_booking: boolean }>;
+  procedures: Array<{ id?: string; name: string; description: string | null; online_booking: boolean }>;
+  coverage?: Array<{ procedure_id: string; insurance_plan_id: string; accepted: boolean; instructions: string | null }>;
   faqs: Array<{ question: string; answer: string }>;
 };
 
@@ -11,6 +12,7 @@ function containsTerm(message: string, term: string) { const text = ` ${normaliz
 export type InsurancePlanTriageResult =
   | { kind: "accepted"; plan: KnowledgeData["plans"][number] }
   | { kind: "caixa" }
+  | { kind: "ambiguous" }
   | { kind: "unsupported" };
 
 function planAnswer(value: string) {
@@ -45,6 +47,13 @@ function sharesBrandWord(left: string, right: string) {
   return leftWords.some((lw) => rightWords.some((rw) => lw.includes(rw) || rw.includes(lw)));
 }
 
+function resolvePlanCandidates(candidates: Array<{ plan: KnowledgeData["plans"][number] }>): InsurancePlanTriageResult | null {
+  const plans = [...new Map(candidates.map((candidate) => [candidate.plan.id, candidate.plan])).values()];
+  if (plans.length === 1) return { kind: "accepted", plan: plans[0] };
+  if (plans.length > 1) return { kind: "ambiguous" };
+  return null;
+}
+
 export function triageInsurancePlan(message: string, data: Pick<KnowledgeData, "plans" | "aliases">): InsurancePlanTriageResult {
   if (isParticularAnswer(message)) {
     return { kind: "accepted", plan: { id: "particular", name: "Particular", instructions: null } };
@@ -58,23 +67,16 @@ export function triageInsurancePlan(message: string, data: Pick<KnowledgeData, "
   if (answer.length < 3) return { kind: "unsupported" };
 
   const canonicalCandidates = data.plans.map((plan) => ({ term: normalize(plan.name), plan }));
-  const canonicalExact = canonicalCandidates.find((candidate) => samePlanTerm(candidate.term, answer));
-  if (canonicalExact) return { kind: "accepted", plan: canonicalExact.plan };
-
-  const canonicalPartial = canonicalCandidates.filter((candidate) => containsPlanTerm(candidate.term, answer) || sharesBrandWord(candidate.term, answer));
-  const canonicalPlanIds = [...new Set(canonicalPartial.map((candidate) => candidate.plan.id))];
-  if (canonicalPlanIds.length >= 1) return { kind: "accepted", plan: canonicalPartial[0].plan };
-
   const aliasCandidates = data.aliases.flatMap((alias) => {
     const plan = data.plans.find((entry) => entry.id === alias.insurance_plan_id);
     return plan ? [{ term: normalize(alias.alias), plan }] : [];
   });
-  const aliasExact = aliasCandidates.find((candidate) => samePlanTerm(candidate.term, answer));
-  if (aliasExact) return { kind: "accepted", plan: aliasExact.plan };
 
-  const aliasPartial = aliasCandidates.filter((candidate) => containsPlanTerm(candidate.term, answer) || sharesBrandWord(candidate.term, answer));
-  const aliasPlanIds = [...new Set(aliasPartial.map((candidate) => candidate.plan.id))];
-  if (aliasPlanIds.length >= 1) return { kind: "accepted", plan: aliasPartial[0].plan };
+  const exact = resolvePlanCandidates([...canonicalCandidates, ...aliasCandidates].filter((candidate) => samePlanTerm(candidate.term, answer)));
+  if (exact) return exact;
+
+  const partial = resolvePlanCandidates([...canonicalCandidates, ...aliasCandidates].filter((candidate) => containsPlanTerm(candidate.term, answer) || sharesBrandWord(candidate.term, answer)));
+  if (partial) return partial;
 
   if (/\bcaixa\b/.test(answer)) return { kind: "caixa" };
   if (["dental", "odonto", "plano", "convenio", "saude"].includes(answer)) return { kind: "unsupported" };

@@ -24,9 +24,13 @@ O worker lê os próximos oito dias do Calendar a cada `WORKER_CALENDAR_SYNC_INT
 
 `EVOLUTION_INTERACTIVE_MESSAGES=true` habilita botões nativos. Enquanto estiver `false`, ou se o endpoint interativo falhar, o worker envia o mesmo conteúdo como texto. Antes de habilitar, valide a versão/integração da Evolution e teste respostas de botão em Android, iOS, WhatsApp Web e Desktop.
 
+O readiness web consulta somente leitura `connectionState` da instância indicada em `EVOLUTION_INSTANCE`; URL, chave e nome preenchidos não bastam. Apenas estado `open` é pronto. Uma instância ausente, fechada ou não autorizada deixa `/api/health/ready` indisponível e não envia nenhuma mensagem.
+
 ## Atendimento contextual
 
 O plano odontológico é solicitado somente para um novo agendamento quando o paciente ainda não possui plano ativo cadastrado. Endereço, procedimentos, consultas existentes, remarcação, cancelamento e acompanhamento de tratamento não passam por essa barreira. Perguntas sobre a próxima consulta usam `get_upcoming_appointment_by_phone`; andamento de prótese ou tratamento é encaminhado com contexto para a equipe.
+
+Plano, procedimento, cobertura e preço são resolvidos antes da resposta por registros estruturados. Um nome de plano com mais de um candidato pede esclarecimento; cobertura ausente ou negativa nunca é afirmada como positiva. Perguntas de preço e fatos sem fonte segura recebem fallback e handoff. A IA recebe apenas a FAQ verificada, a mensagem atual e contexto de intenção/ação — nunca o texto bruto de mensagens anteriores — e sua saída passa por validação antes do envio.
 
 Quando uma pessoa da equipe envia uma mensagem pelo WhatsApp conectado, a automação é pausada por duas horas para aquele telefone. A pausa cancela mensagens ainda pendentes e o worker verifica novamente o estado imediatamente antes de responder, evitando que uma mensagem já reivindicada interrompa o atendimento humano.
 

@@ -4,13 +4,14 @@ import { pathToFileURL } from "node:url";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { EvolutionClient } from "../src/integrations/evolution/client.ts";
 import { decryptOtp } from "../src/lib/messaging/otp-cipher.ts";
-import { classifyIntent, isAccessLinkRequest, isClinicalQuestion, isExplicitHumanRequest, type MessageIntent } from "../src/domain/messaging/intent.ts";
+import { classifyIntent, isAccessLinkRequest, isExplicitHumanRequest, isProcedureBookingRequest, type MessageIntent } from "../src/domain/messaging/intent.ts";
 import { whatsappMessageFingerprint } from "../src/domain/messaging/fingerprint.ts";
 import { handoffNotificationMessage, handoffReason } from "../src/domain/messaging/handoff.ts";
 import {
   accessLinkInteractiveMessage,
   appointmentConfirmationRequestInteractiveMessage,
   appointmentInteractiveMessage,
+  ambiguousInsuranceMessage,
   attendanceConfirmationReplyMessage,
   upcomingAppointmentInteractiveMessage,
   dailyConfirmationSummaryMessage,
@@ -19,19 +20,27 @@ import {
   caixaInsuranceMessage,
   initialInsurancePromptMessage,
   insurancePromptMessage,
+  knowledgeFallbackMessage,
   knowledgeAnswerInteractiveMessage,
   menuActions,
   otpMessage,
   procedureInsurancePromptMessage,
   procedurePromptMessage,
+  priceConfirmationMessage,
   questionsInteractiveMessage,
   unsupportedInsuranceMessage,
   unsupportedMediaInteractiveMessage,
   treatmentStatusHandoffMessage,
+  verifiedCoverageMessage,
+  verifiedPlanListMessage,
+  verifiedPlanMessage,
+  verifiedProcedureListMessage,
+  verifiedProcedureMessage,
   type InteractiveMessage,
   type DailyConfirmationSummary,
 } from "../src/domain/messaging/templates.ts";
-import { findRequestedProcedure, findStructuredAnswer, triageInsurancePlan, type KnowledgeData } from "../src/domain/knowledge/service.ts";
+import { findRequestedProcedure, triageInsurancePlan, type KnowledgeData } from "../src/domain/knowledge/service.ts";
+import { resolveVerifiedFacts } from "../src/domain/knowledge/verified-facts.ts";
 import { generateClinicReply } from "../src/integrations/openai/chat.ts";
 import { isCorrelationId, log } from "../src/lib/observability/logger.ts";
 import { incrementCounter, renderPrometheusMetrics, setGauge } from "../src/lib/observability/metrics.ts";
@@ -54,6 +63,15 @@ type RecipientPolicy = "all" | "allowlist";
 type Config = { supabaseUrl: string; supabaseKey: string; evolutionBaseUrl: string; evolutionApiKey: string; evolutionInstance: string; otpSecret: string; portalBaseUrl: string; handoffNotificationPhone: string; dailySummaryHour?: number; googleCredentials?: GoogleServiceAccountCredentials; googleCalendarId?: string; calendarSyncIntervalMs?: number; openaiApiKey?: string; openaiModel: string; interactiveMessages?: boolean; recipientPolicy?: RecipientPolicy; pollMs: number; healthPort: number; workerId?: string; concurrency?: number; leaseSeconds?: number; allowedRecipients?: string[]; humanTakeoverPauseMinutes?: number; planTriageEnabled?: boolean };
 
 const WHATSAPP_ACCESS_LINK_TTL_MS = 24 * 60 * 60_000;
+
+function verifiedFactSource(resolution: ReturnType<typeof resolveVerifiedFacts> | undefined) {
+  if (resolution?.kind !== "resolved") return "none";
+  if (resolution.facts.coverage) return "coverage";
+  if (resolution.facts.plan || resolution.facts.planList) return "plan";
+  if (resolution.facts.procedure || resolution.facts.procedureList) return "procedure";
+  if (resolution.facts.faq) return "faq";
+  return "none";
+}
 
 function required(name: string) { const value = process.env[name]?.trim(); if (!value) throw new Error(`Missing ${name}`); return value; }
 function booleanSetting(name: string, fallback = false) { const value = process.env[name]?.trim().toLowerCase(); if (!value) return fallback; if (value === "true") return true; if (value === "false") return false; throw new Error(`${name}_INVALID`); }
@@ -287,13 +305,16 @@ export class MessagingWorker {
       && !/\b(depende|horas?|hrs?|chegar|compromisso|consulta|retorno|marcar|agendar|remarcar|cancelar)\b/i.test(value);
   }
   private async patientHasActivePlan(phone: string) {
+    return Boolean(await this.patientActivePlanId(phone));
+  }
+  private async patientActivePlanId(phone: string): Promise<string | null> {
     const { data: patient, error: patientError } = await this.db.from("patients").select("insurance_plan_id").eq("phone", phone).maybeSingle();
     if (patientError) throw new Error("PATIENT_PLAN_LOOKUP_FAILED");
     const planId = (patient as { insurance_plan_id?: string | null } | null)?.insurance_plan_id;
-    if (!planId) return false;
+    if (!planId) return null;
     const { data: plan, error: planError } = await this.db.from("insurance_plans").select("name,active").eq("id", planId).maybeSingle();
     if (planError) throw new Error("PATIENT_PLAN_LOOKUP_FAILED");
-    return Boolean((plan as { name?: string; active?: boolean } | null)?.active);
+    return (plan as { active?: boolean } | null)?.active ? planId : null;
   }
   private async preparePlanTriage(row: InboxRow, intent: MessageIntent, message: string): Promise<PlanTriageDecision> {
     if (!this.config.planTriageEnabled) return { kind: "continue" };
@@ -314,6 +335,9 @@ export class MessagingWorker {
       if (result.kind === "accepted" && canBePlanAnswer) {
         return { kind: "resume", message: activeSession.pending_message, planId: result.plan.id, promptedByInboxId: activeSession.prompted_by_inbox_id };
       }
+      if (result.kind === "ambiguous" && canBePlanAnswer) {
+        return { kind: "reply", message: ambiguousInsuranceMessage, action: "plan_requested" };
+      }
       if (result.kind === "caixa" && canBePlanAnswer && this.likelyPlanAnswer(message)) {
         return { kind: "reply", message: caixaInsuranceMessage, action: "plan_rejected_caixa", rejectedSession: activeSession };
       }
@@ -326,14 +350,18 @@ export class MessagingWorker {
     }
 
     if (!this.requiresPlanTriage(intent, message)) return { kind: "continue" };
+    if (await this.patientHasActivePlan(row.phone)) return { kind: "continue" };
+    const knowledge = await this.loadKnowledge();
+    const initialPlan = triageInsurancePlan(message, knowledge);
+    if (initialPlan.kind === "ambiguous") return { kind: "reply", message: ambiguousInsuranceMessage, action: "plan_requested" };
+    if (initialPlan.kind === "accepted") return { kind: "resume", message, planId: initialPlan.plan.id, promptedByInboxId: row.id };
+    if (initialPlan.kind === "caixa" && this.likelyPlanAnswer(message)) return { kind: "reply", message: caixaInsuranceMessage, action: "plan_rejected_caixa" };
     let prompt = initialInsurancePromptMessage;
     if (intent === "procedure") {
-      const requestedProcedure = findRequestedProcedure(message, await this.loadKnowledge());
+      const requestedProcedure = findRequestedProcedure(message, knowledge);
       if (!requestedProcedure?.online_booking) return { kind: "continue" };
       prompt = procedureInsurancePromptMessage(requestedProcedure.name);
     }
-    if (await this.patientHasActivePlan(row.phone)) return { kind: "continue" };
-
     await this.savePlanTriage(row.phone, { status: "awaiting_plan", pending_message: message, prompted_by_inbox_id: row.id, insurance_plan_id: null, expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString() });
     return { kind: "reply", message: prompt, action: "plan_requested" };
   }
@@ -352,19 +380,19 @@ export class MessagingWorker {
     log("info", "inbox_ignored_during_human_takeover", { correlationId: row.id });
     return true;
   }
-  private async loadRecentConversation(phone: string, currentId: string) {
+  private async loadConversationContext(phone: string, currentId: string) {
     try {
       const { data, error } = await this.db.from("whatsapp_inbox")
-        .select("message_text,classified_intent,processed_action")
+        .select("classified_intent,processed_action")
         .eq("phone", phone)
         .neq("id", currentId)
         .gte("created_at", new Date(Date.now() - 30 * 60_000).toISOString())
         .order("created_at", { ascending: false })
         .limit(5);
       if (error) return [];
-      return ((data ?? []) as Array<{ message_text: string; classified_intent: string | null; processed_action: string | null }>)
+      return ((data ?? []) as Array<{ classified_intent: string | null; processed_action: string | null }>)
         .reverse()
-        .map((entry) => ({ message: entry.message_text.slice(0, 800), intent: entry.classified_intent, action: entry.processed_action }));
+        .map((entry) => ({ intent: entry.classified_intent, action: entry.processed_action }));
     } catch {
       return [];
     }
@@ -410,11 +438,17 @@ export class MessagingWorker {
       let handoff = false;
       let usedLlm = false;
       let usedFallback = false;
+      let groundingResult = "not_used";
       let processedAction: string | undefined;
       let knowledge: KnowledgeData | undefined;
-      const requestedProcedure = intent === "procedure"
-        ? findRequestedProcedure(messageText, knowledge = await this.loadKnowledge())
-        : null;
+      const needsKnowledge = ["insurance", "procedure", "faq", "conversation"].includes(intent);
+      if (needsKnowledge) knowledge = await this.loadKnowledge();
+      const selectedPlanId = intent === "procedure"
+        ? acceptedPlan?.id ?? (this.config.planTriageEnabled ? await this.patientActivePlanId(row.phone) : "particular")
+        : undefined;
+      const verifiedFacts = knowledge
+        ? resolveVerifiedFacts(messageText, knowledge, { insurancePlanId: selectedPlanId === "particular" ? undefined : selectedPlanId ?? undefined })
+        : undefined;
       if (intent === "confirm") {
         const { data, error } = await this.db.rpc("confirm_upcoming_appointment_by_phone", { p_phone: row.phone });
         const result = data as { status?: "confirmed" | "already_confirmed" | "not_found" | "ambiguous"; start_at?: string } | null;
@@ -435,9 +469,45 @@ export class MessagingWorker {
         reply = treatmentStatusHandoffMessage;
         handoff = true;
       }
-      else if (requestedProcedure?.online_booking) {
-        reply = accessLinkInteractiveMessage(await this.createAccessUrl(row.phone), "schedule");
-        processedAction = "portal_link";
+      else if (verifiedFacts?.kind === "ambiguous_plan") {
+        reply = ambiguousInsuranceMessage;
+        processedAction = "structured_answer";
+      }
+      else if (verifiedFacts?.kind === "price_unavailable") {
+        reply = priceConfirmationMessage;
+        handoff = true;
+      }
+      else if (verifiedFacts?.kind === "resolved" && verifiedFacts.critical) {
+        const facts = verifiedFacts.facts;
+        if (facts.coverage && facts.plan && facts.procedure) {
+          reply = knowledgeAnswerInteractiveMessage(verifiedCoverageMessage({
+            planName: facts.plan.name,
+            procedureName: facts.procedure.name,
+            status: facts.coverage.status,
+            instructions: facts.coverage.instructions,
+          }));
+          if (facts.coverage.status !== "accepted") handoff = true;
+          else if (facts.procedure.online_booking && isProcedureBookingRequest(messageText)) {
+            reply = accessLinkInteractiveMessage(await this.createAccessUrl(row.phone), "schedule");
+            processedAction = "portal_link";
+          }
+        }
+        else if (facts.planList) reply = knowledgeAnswerInteractiveMessage(verifiedPlanListMessage(facts.planList));
+        else if (facts.procedureList) reply = knowledgeAnswerInteractiveMessage(verifiedProcedureListMessage(facts.procedureList));
+        else if (facts.plan) reply = knowledgeAnswerInteractiveMessage(verifiedPlanMessage(facts.plan));
+        else if (facts.procedure) {
+          if (facts.procedure.online_booking && isProcedureBookingRequest(messageText) && selectedPlanId === "particular") {
+            reply = accessLinkInteractiveMessage(await this.createAccessUrl(row.phone), "schedule");
+            processedAction = "portal_link";
+          } else if (facts.procedure.online_booking && isProcedureBookingRequest(messageText) && !selectedPlanId) {
+            reply = initialInsurancePromptMessage;
+            processedAction = "plan_requested";
+          } else reply = knowledgeAnswerInteractiveMessage(verifiedProcedureMessage(facts.procedure));
+        }
+        else {
+          reply = knowledgeFallbackMessage;
+          handoff = true;
+        }
       }
       else if (["schedule", "reschedule", "cancel"].includes(intent)) reply = accessLinkInteractiveMessage(await this.createAccessUrl(row.phone), intent);
       else if (intent === "greeting") reply = greetingInteractiveMessage;
@@ -446,31 +516,31 @@ export class MessagingWorker {
       else if (messageText === menuActions.procedures) reply = procedurePromptMessage;
       else if (messageText === menuActions.unsupportedMedia) reply = unsupportedMediaInteractiveMessage;
       else if (isExplicitHumanRequest(messageText)) { reply = humanFallbackMessage; handoff = true; }
-      else {
-        knowledge ??= await this.loadKnowledge();
-        const structuredAnswer = findStructuredAnswer(messageText, knowledge);
-        const recentConversation = await this.loadRecentConversation(row.phone, row.id);
+      else if (verifiedFacts?.kind === "resolved" && verifiedFacts.facts.faq) {
+        const facts = { faq: verifiedFacts.facts.faq };
         if (this.config.openaiApiKey) {
           try {
-            const generated = await generateClinicReply({ apiKey: this.config.openaiApiKey, model: this.config.openaiModel, message: messageText, knowledge, recentConversation });
+            const conversationContext = await this.loadConversationContext(row.phone, row.id);
+            const generated = await generateClinicReply({ apiKey: this.config.openaiApiKey, model: this.config.openaiModel, message: messageText, facts, conversationContext });
             usedLlm = true;
+            groundingResult = "accepted";
             handoff = generated.handoffRequired;
             reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(generated.text);
           } catch (error) {
             log("warn", "openai_reply_failed", { correlationId: row.id, error });
-            handoff = !structuredAnswer && isClinicalQuestion(messageText);
-            usedFallback = !handoff && !structuredAnswer;
-            reply = handoff
-              ? humanFallbackMessage
-              : knowledgeAnswerInteractiveMessage(structuredAnswer ?? "Pode detalhar o que você precisa?");
+            usedFallback = true;
+            groundingResult = "fallback";
+            reply = knowledgeAnswerInteractiveMessage(facts.faq.answer);
           }
         } else {
-          handoff = !structuredAnswer && isClinicalQuestion(messageText);
-          usedFallback = !handoff && !structuredAnswer;
-          reply = handoff
-            ? humanFallbackMessage
-            : knowledgeAnswerInteractiveMessage(structuredAnswer ?? "Pode detalhar o que você precisa?");
+          usedFallback = true;
+          groundingResult = "disabled";
+          reply = knowledgeAnswerInteractiveMessage(facts.faq.answer);
         }
+      }
+      else {
+        reply = knowledgeFallbackMessage;
+        handoff = true;
       }
       if (await this.ignoreIfConversationPaused(row, intent)) return;
       if (handoff) {
@@ -483,7 +553,7 @@ export class MessagingWorker {
       const action = processedAction ?? (handoff ? "handoff" : ["schedule", "reschedule", "cancel"].includes(intent) ? "portal_link" : usedLlm ? "llm_answer" : usedFallback ? "fallback_answer" : "structured_answer");
       await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: null, classified_intent: intent, processed_action: action }, row.lease_token);
       incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "inbox", result: handoff ? "handoff" : "answered" });
-      log("info", "inbox_message_processed", { correlationId: row.id, intent, action, attempts: row.attempts, durationMs: Date.now() - startedAt });
+      log("info", "inbox_message_processed", { correlationId: row.id, intent, action, factResolution: verifiedFacts?.kind ?? "not_requested", factSource: verifiedFactSource(verifiedFacts), groundingResult, attempts: row.attempts, durationMs: Date.now() - startedAt });
     } catch (error) {
       incrementCounter("luna_worker_failures_total", "Worker processing failures.", { queue: "inbox" });
       log("error", "inbox_processing_failed", { correlationId: row.id, attempts: row.attempts, error });
@@ -494,7 +564,7 @@ export class MessagingWorker {
     }
   }
   private async createAccessUrl(phone: string) { const token = opaqueToken(); const { error } = await this.db.from("access_tokens").insert({ phone, token_hash: tokenHash(token), origin: "whatsapp_link", expires_at: new Date(Date.now() + WHATSAPP_ACCESS_LINK_TTL_MS).toISOString() }); if (error) throw error; return `${this.config.portalBaseUrl}/acesso#token=${encodeURIComponent(token)}`; }
-  private async loadKnowledge(): Promise<KnowledgeData> { const [plans, aliases, procedures, faqs] = await Promise.all([this.db.from("insurance_plans").select("id,name,instructions").eq("active", true), this.db.from("insurance_aliases").select("alias,insurance_plan_id").eq("active", true), this.db.from("procedures").select("name,description,online_booking").eq("active", true), this.db.from("faq_entries").select("question,answer").eq("active", true)]); if (plans.error || aliases.error || procedures.error || faqs.error) throw new Error("KNOWLEDGE_FAILED"); return { plans: plans.data ?? [], aliases: aliases.data ?? [], procedures: procedures.data ?? [], faqs: faqs.data ?? [] }; }
+  private async loadKnowledge(): Promise<KnowledgeData> { const [plans, aliases, procedures, coverage, faqs] = await Promise.all([this.db.from("insurance_plans").select("id,name,instructions").eq("active", true), this.db.from("insurance_aliases").select("alias,insurance_plan_id").eq("active", true), this.db.from("procedures").select("id,name,description,online_booking").eq("active", true), this.db.from("procedure_coverage").select("procedure_id,insurance_plan_id,accepted,instructions"), this.db.from("faq_entries").select("question,answer").eq("active", true)]); if (plans.error || aliases.error || procedures.error || coverage.error || faqs.error) throw new Error("KNOWLEDGE_FAILED"); return { plans: plans.data ?? [], aliases: aliases.data ?? [], procedures: procedures.data ?? [], coverage: coverage.data ?? [], faqs: faqs.data ?? [] }; }
   async run() { log("info", "worker_started", { workerId: this.config.workerId, pollMs: this.config.pollMs, healthPort: this.config.healthPort, concurrency: this.config.concurrency, leaseSeconds: this.config.leaseSeconds, recipientPolicy: this.config.recipientPolicy, allowedRecipientCount: this.config.allowedRecipients?.length ?? 0, interactiveMessages: this.config.interactiveMessages, dailySummaryHour: this.config.dailySummaryHour ?? 8, calendarSyncIntervalMs: this.config.calendarSyncIntervalMs, calendarSyncEnabled: Boolean(this.calendarAuth), openaiEnabled: Boolean(this.config.openaiApiKey) }); while (!this.stopped) { try { await this.tick(); } catch (error) { this.lastPoll = 0; incrementCounter("luna_worker_failures_total", "Worker processing failures.", { queue: "poll" }); log("error", "worker_poll_failed", { pollNumber: this.pollNumber, error }); } await new Promise((resolve) => setTimeout(resolve, this.config.pollMs)); } log("info", "worker_stopped", { pollsCompleted: this.pollNumber }); }
   stop() { if (!this.stopped) log("info", "worker_shutdown_requested", { pollsCompleted: this.pollNumber }); this.stopped = true; }
   healthy() { return !this.stopped && Date.now() - this.lastPoll < Math.max(this.config.pollMs * 5, 10_000); }
