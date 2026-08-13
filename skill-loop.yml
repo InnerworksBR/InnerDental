@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/takumiyoshikawa/skill-loop/refs/heads/main/schema.json
+
+name: whatsapp-definitive-fix
+default_entrypoint: whatsapp-fix
+max_iterations: 6
+idle_timeout_seconds: 1800
+max_restarts: 0
+
+router:
+  runtime: codex
+
+skills:
+  whatsapp-fix:
+    agent:
+      runtime: codex
+      args:
+        - "--approve-for-me"
+    next:
+      - id: send-review
+        skill: whatsapp-review
+
+  whatsapp-review:
+    agent:
+      runtime: codex
+      args:
+        - "--approve-for-me"
+    next:
+      - id: approve
+        criteria: >-
+          The reviewer explicitly concludes APPROVED, reports no material correctness
+          findings, and confirms the incident regression tests and relevant validation pass.
+        done: true
+      - id: rework
+        criteria: >-
+          The reviewer concludes NEEDS_REWORK or reports any material bug, missing incident
+          regression, unsafe assumption, failing validation, or unresolved catalog/state issue.
+        skill: whatsapp-fix

@@ -50,16 +50,16 @@ export async function POST(request: Request) {
     const session = await requirePatientSession();
     const body = patientAppointmentSchema.parse(await request.json());
     const profile = await patientProfileForPhone(session.phone);
-    if (!profile.complete && (!body.patientName || !body.insurancePlanId)) return NextResponse.json({ error: "CADASTRO_INCOMPLETO", correlationId }, { status: 400 });
-    const insurancePlanId = body.insurancePlanId ?? profile.insurancePlanId;
-    if (!insurancePlanId) return NextResponse.json({ error: "CADASTRO_INCOMPLETO", correlationId }, { status: 400 });
+    const patientName = body.patientName ?? profile.name;
+    const insurancePlanId = profile.insurancePlanId ?? body.insurancePlanId;
+    if (!patientName || !insurancePlanId) return NextResponse.json({ error: "CADASTRO_INCOMPLETO", correlationId }, { status: 400 });
     const { data: plan } = await createSupabaseAdminClient().from("insurance_plans").select("id").eq("id", insurancePlanId).eq("active", true).maybeSingle();
     if (!plan) return NextResponse.json({ error: "PLANO_INVALIDO", correlationId }, { status: 400 });
     const token = await getGoogleCalendarAccessToken();
     const appointment = await createPatientAppointment({
       ...body,
       companionName: body.partySize === 2 ? body.companionName : undefined,
-      patientName: body.patientName ?? profile.name ?? undefined,
+      patientName,
       insurancePlanId,
       phone: session.phone,
       sessionId: session.sessionId,

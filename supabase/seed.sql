@@ -25,13 +25,11 @@ on conflict (professional_id, weekday, start_time, end_time) do nothing;
 insert into public.insurance_plans (name, active, instructions)
 values
   ('Rede UNNA', true, null),
-  ('Odontoprev', true, null),
-  ('Bradesco Dental', true, null),
-  ('BB Dental', true, null),
-  ('Previan', true, null),
+  ('Particular', true, null),
   ('Unimed Odonto', true, null),
   ('SulAmérica', true, null),
   ('Amil Dental', true, null),
+  ('DentalPar', true, null),
   ('Uniodonto', true, null),
   ('MetLife', true, null),
   ('Transmontano', true, null),
@@ -46,15 +44,12 @@ join (
   values
     ('Rede UNNA', 'Bradesco Dental'),
     ('Rede UNNA', 'Odontoprev'),
+    ('Rede UNNA', 'Odontopreve'),
     ('Rede UNNA', 'BB Dental'),
-    ('Rede UNNA', 'Previan')
+    ('Rede UNNA', 'Previan'),
+    ('DentalPar', 'Dental Par'),
+    ('Transmontano', 'Tramontano')
 ) as alias(plan_name, alias) on alias.plan_name = plan.name
-on conflict (insurance_plan_id, alias) do nothing;
-
-insert into public.insurance_aliases (insurance_plan_id, alias)
-select id, 'Tramontano'
-from public.insurance_plans
-where name = 'Transmontano'
 on conflict (insurance_plan_id, alias) do update set active = true;
 
 insert into public.procedures (name, description, online_booking, active)
@@ -63,6 +58,7 @@ values
   ('Limpeza', 'Agendamento online iniciado por consulta de avaliação.', true, true),
   ('Prótese', 'Conforme plano; iniciar por avaliação.', true, true),
   ('Ortodontia', 'Conforme plano; iniciar por avaliação.', true, true),
+  ('Crianças abaixo de 8 anos', 'Não são realizadas consultas em menores de 8 anos.', false, true),
   ('Canal em molar', 'Não realizado.', false, false),
   ('Extração de siso', 'Apenas particular; encaminhar para avaliação.', false, true),
   ('Urgência', 'Encaminhar para avaliação.', false, true)

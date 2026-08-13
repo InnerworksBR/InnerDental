@@ -32,11 +32,15 @@ O plano odontológico é solicitado somente para um novo agendamento quando o pa
 
 Plano, procedimento, cobertura e preço são resolvidos antes da resposta por registros estruturados. Um nome de plano com mais de um candidato pede esclarecimento; cobertura ausente ou negativa nunca é afirmada como positiva. Perguntas de preço e fatos sem fonte segura recebem fallback e handoff. A IA recebe apenas a FAQ verificada, a mensagem atual e contexto de intenção/ação — nunca o texto bruto de mensagens anteriores — e sua saída passa por validação antes do envio.
 
+O aceite de plano é uma única transação que vincula o inbox da resposta, o prompt pendente, o plano ativo e o perfil do paciente. Em retry, apenas aquele mesmo inbox retoma a solicitação original; uma mensagem posterior não reabre o contexto aceito. Criação, substituição e rejeição de triagem usam a mesma trava por telefone, portanto uma leitura atrasada não substitui um aceite confirmado.
+
+Todo link de portal originado por inbox é preparado uma única vez por `source_inbox_id`: o token opaco fica cifrado com AES-GCM em repouso e o retry recupera a mesma URL, validando hash, telefone, status ativo e expiração antes de usá-la. Após uma resposta confirmada pela Evolution, a entrega recebe `status=sent` e `sent_at`; um retry que só precisa finalizar o inbox não chama o provedor novamente. A Evolution não oferece uma chave de idempotência de entrega neste fluxo: se a conexão cair entre a confirmação do provedor e a gravação de `sent_at`, essa janela ambígua pode repetir a tentativa, embora nunca gere outra URL.
+
 Quando uma pessoa da equipe envia uma mensagem pelo WhatsApp conectado, a automação é pausada por duas horas para aquele telefone. A pausa cancela mensagens ainda pendentes e o worker verifica novamente o estado imediatamente antes de responder, evitando que uma mensagem já reivindicada interrompa o atendimento humano.
 
 Cada claim novo recebe `lease_token`, `lease_owner` e expiração. A conclusão exige o token vigente; uma instância atrasada não sobrescreve o trabalho de outra. `WORKER_CONCURRENCY` limita o paralelismo local e `WORKER_LEASE_SECONDS` deve permanecer entre 30 e 900 segundos. Após seis tentativas, o item recebe `dead_lettered_at`, sai do retry automático e permanece visível no painel interno.
 
-Rollout compatível: aplicar todas as migrations pendentes em ordem, terminando em `202607300023_professional_whatsapp_conversations.sql`; confirmar `get_upcoming_appointment_by_phone`, `is_whatsapp_conversation_paused` e as funções de lease; somente então promover o web e o worker. Para rollback, parar o worker novo e retornar ao digest anterior; o schema é aditivo e todas as mensagens permanecem preservadas.
+Rollout compatível: aplicar todas as migrations pendentes em ordem, terminando em `202608130028_whatsapp_retry_cas_delivery_state.sql`; confirmar `get_upcoming_appointment_by_phone`, `is_whatsapp_conversation_paused`, as funções de lease, `transition_whatsapp_plan_triage`, `prepare_whatsapp_access_link`, `mark_whatsapp_access_link_delivered` e `whatsapp_routing_schema_ready`; somente então promover o web e o worker. Esta versão não considera pronto um banco parado na migration 027. Para rollback, parar o worker novo e retornar ao digest anterior; o schema é aditivo e todas as mensagens permanecem preservadas.
 
 ## Rollback
 

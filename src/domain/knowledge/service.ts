@@ -3,11 +3,24 @@ export type KnowledgeData = {
   aliases: Array<{ alias: string; insurance_plan_id: string }>;
   procedures: Array<{ id?: string; name: string; description: string | null; online_booking: boolean }>;
   coverage?: Array<{ procedure_id: string; insurance_plan_id: string; accepted: boolean; instructions: string | null }>;
-  faqs: Array<{ question: string; answer: string }>;
+  faqs: Array<{ category?: string; question: string; answer: string }>;
 };
 
-function normalize(value: string) { return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim(); }
-function containsTerm(message: string, term: string) { const text = ` ${normalize(message)} `; const needle = ` ${normalize(term)} `; return needle.length > 2 && text.includes(needle); }
+export function normalizeKnowledgeTerm(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function containsExactTerm(message: string, term: string) {
+  const text = ` ${normalizeKnowledgeTerm(message)} `;
+  const needle = ` ${normalizeKnowledgeTerm(term)} `;
+  return needle.length > 2 && text.includes(needle);
+}
 
 export type InsurancePlanTriageResult =
   | { kind: "accepted"; plan: KnowledgeData["plans"][number] }
@@ -15,8 +28,42 @@ export type InsurancePlanTriageResult =
   | { kind: "ambiguous" }
   | { kind: "unsupported" };
 
+type PlanTerm = { term: string; plan: KnowledgeData["plans"][number] };
+
+function publicPlanTerms(data: Pick<KnowledgeData, "plans" | "aliases">): PlanTerm[] {
+  const byId = new Map(data.plans.map((plan) => [plan.id, plan]));
+  return [
+    ...data.plans.map((plan) => ({ term: normalizeKnowledgeTerm(plan.name), plan })),
+    ...data.aliases.flatMap((alias) => {
+      const plan = byId.get(alias.insurance_plan_id);
+      return plan ? [{ term: normalizeKnowledgeTerm(alias.alias), plan }] : [];
+    }),
+  ].filter(({ term }) => term.length > 0);
+}
+
+/**
+ * The database prevents these conflicts, but the worker validates the catalog too so a
+ * partially migrated or manually corrupted catalog fails closed before it can answer.
+ */
+export function insurancePlanCatalogConflicts(data: Pick<KnowledgeData, "plans" | "aliases">) {
+  const owners = new Map<string, Set<string>>();
+  for (const { term, plan } of publicPlanTerms(data)) {
+    const ids = owners.get(term) ?? new Set<string>();
+    ids.add(plan.id);
+    owners.set(term, ids);
+  }
+  return [...owners.entries()]
+    .filter(([, ids]) => ids.size > 1)
+    .map(([term]) => term);
+}
+
+export function assertInsurancePlanCatalog(data: Pick<KnowledgeData, "plans" | "aliases">) {
+  const conflicts = insurancePlanCatalogConflicts(data);
+  if (conflicts.length > 0) throw new Error("PLAN_CATALOG_CONFLICT");
+}
+
 function planAnswer(value: string) {
-  return normalize(value)
+  return normalizeKnowledgeTerm(value)
     .replace(/^(?:o\s+)?meu\s+(?:plano|convenio)\s+(?:e|eh)\s+/, "")
     .replace(/^(?:o\s+)?(?:plano|convenio)\s+(?:e|eh)\s+/, "")
     .replace(/^eu\s+(?:tenho|uso|utilizo)\s+(?:o\s+plano\s+|o\s+convenio\s+|o\s+)?/, "")
@@ -27,94 +74,94 @@ function planAnswer(value: string) {
 }
 
 function isParticularAnswer(value: string): boolean {
-  const norm = normalize(value);
-  return /\b(particular|particulars|privado|sem\s+plano|sem\s+convenio|nao\s+tenho\s+plano|nao\s+tenho\s+convenio|nao\s+tenho|nao\s+possuo|nenhum|nenhuma|sem|pagamento\s+particular|consulta\s+particular)\b/.test(norm);
+  const term = normalizeKnowledgeTerm(value);
+  return term === "particular"
+    || term === "privado"
+    || /^(?:atendimento|consulta|pagamento) particular$/.test(term)
+    || /^(?:sem|nao tenho|nao possuo) (?:plano|convenio)$/.test(term);
 }
 
-function samePlanTerm(left: string, right: string) {
-  return left === right || left.replace(/\s+/g, "") === right.replace(/\s+/g, "");
+function particularPlan(data: Pick<KnowledgeData, "plans">) {
+  return data.plans.find(isParticularPlan);
 }
 
-function containsPlanTerm(left: string, right: string) {
-  const compactLeft = left.replace(/\s+/g, "");
-  const compactRight = right.replace(/\s+/g, "");
-  return left.includes(right) || right.includes(left) || compactLeft.includes(compactRight) || compactRight.includes(compactLeft);
-}
-
-function sharesBrandWord(left: string, right: string) {
-  const leftWords = left.split(/\s+/).filter((w) => w.length > 2 && !["dental", "odonto", "plano", "convenio", "saude", "rede"].includes(w));
-  const rightWords = right.split(/\s+/).filter((w) => w.length > 2 && !["dental", "odonto", "plano", "convenio", "saude", "rede"].includes(w));
-  return leftWords.some((lw) => rightWords.some((rw) => lw.includes(rw) || rw.includes(lw)));
-}
-
-function resolvePlanCandidates(candidates: Array<{ plan: KnowledgeData["plans"][number] }>): InsurancePlanTriageResult | null {
-  const plans = [...new Map(candidates.map((candidate) => [candidate.plan.id, candidate.plan])).values()];
-  if (plans.length === 1) return { kind: "accepted", plan: plans[0] };
-  if (plans.length > 1) return { kind: "ambiguous" };
-  return null;
+export function isParticularPlan(plan: Pick<KnowledgeData["plans"][number], "name">) {
+  return normalizeKnowledgeTerm(plan.name) === "particular";
 }
 
 export function triageInsurancePlan(message: string, data: Pick<KnowledgeData, "plans" | "aliases">): InsurancePlanTriageResult {
-  if (isParticularAnswer(message)) {
-    return { kind: "accepted", plan: { id: "particular", name: "Particular", instructions: null } };
+  assertInsurancePlanCatalog(data);
+  if (isParticularAnswer(message) || isParticularAnswer(planAnswer(message))) {
+    // Particular is a first-class plan record. Returning a synthetic identifier
+    // would let the worker send a link before it can persist valid patient state.
+    const plan = particularPlan(data);
+    return plan ? { kind: "accepted", plan } : { kind: "unsupported" };
   }
 
   const answer = planAnswer(message);
-  if (isParticularAnswer(answer)) {
-    return { kind: "accepted", plan: { id: "particular", name: "Particular", instructions: null } };
-  }
-
-  if (answer.length < 3) return { kind: "unsupported" };
-
-  const canonicalCandidates = data.plans.map((plan) => ({ term: normalize(plan.name), plan }));
-  const aliasCandidates = data.aliases.flatMap((alias) => {
-    const plan = data.plans.find((entry) => entry.id === alias.insurance_plan_id);
-    return plan ? [{ term: normalize(alias.alias), plan }] : [];
-  });
-
-  const exact = resolvePlanCandidates([...canonicalCandidates, ...aliasCandidates].filter((candidate) => samePlanTerm(candidate.term, answer)));
-  if (exact) return exact;
-
-  const partial = resolvePlanCandidates([...canonicalCandidates, ...aliasCandidates].filter((candidate) => containsPlanTerm(candidate.term, answer) || sharesBrandWord(candidate.term, answer)));
-  if (partial) return partial;
-
-  if (/\bcaixa\b/.test(answer)) return { kind: "caixa" };
-  if (["dental", "odonto", "plano", "convenio", "saude"].includes(answer)) return { kind: "unsupported" };
-
+  const matchingPlans = [...new Map(
+    publicPlanTerms(data)
+      .filter(({ term }) => term === answer || containsExactTerm(message, term))
+      .map(({ plan }) => [plan.id, plan]),
+  ).values()];
+  if (matchingPlans.length === 1) return { kind: "accepted", plan: matchingPlans[0] };
+  if (matchingPlans.length > 1) return { kind: "ambiguous" };
   return { kind: "unsupported" };
 }
 
+/**
+ * A pending plan prompt may be resumed only by a direct plan response. A new
+ * question can name a valid plan ("Vocês aceitam Bradesco Dental?") without
+ * being an answer to that prompt, so it must retain control of the pipeline.
+ */
+export function isExplicitInsurancePlanAnswer(message: string, data: Pick<KnowledgeData, "plans" | "aliases">) {
+  const result = triageInsurancePlan(message, data);
+  if (result.kind !== "accepted") return false;
+  if (/[?¿]/.test(message)) return false;
+
+  const value = normalizeKnowledgeTerm(message);
+  if (/^(?:voce|voces|a clinica|clinica|eles|ela)\s+(?:aceita|aceitam|atende|atendem|trabalha|trabalham|cobre|cobrem|tem|possui)\b/.test(value)) return false;
+  if (/^(?:qual|quais|como|onde|quando|porque|por que|sera que|gostaria de saber)\b/.test(value)) return false;
+
+  const answer = planAnswer(message);
+  if (isParticularAnswer(message) || isParticularAnswer(answer)) return true;
+  return publicPlanTerms(data).some(({ term, plan }) => plan.id === result.plan.id && term === answer);
+}
+
 export function findRequestedProcedure(message: string, data: Pick<KnowledgeData, "procedures">): KnowledgeData["procedures"][number] | null {
-  return data.procedures.find((entry) => containsTerm(message, entry.name)) ?? null;
+  return data.procedures.find((entry) => containsExactTerm(message, entry.name)) ?? null;
+}
+
+export function findChildCarePolicy(message: string, data: Pick<KnowledgeData, "procedures">) {
+  const normalizedMessage = normalizeKnowledgeTerm(message);
+  const mentionsChildOrAge = /\b(crianca|criancas|filho|filha|menor|idade|anos)\b/.test(normalizedMessage);
+  const asksAboutAttendance = /\b(atende|atendem|aceita|aceitam|consulta|consultar|consultas|pode|podem)\b/.test(normalizedMessage);
+  const asksAboutAgePolicy = /\b(idade|anos?|menor|abaixo|acima)\b/.test(normalizedMessage)
+    && /\b(qual|tem|existe|limite|minim[ao]|maxim[ao]|ate|a partir|aceita|atende|pode)\b/.test(normalizedMessage);
+  // A possessive alone (for example, "o plano do meu filho") is not a
+  // child-care policy question and must remain eligible for plan routing.
+  if (!mentionsChildOrAge || (!asksAboutAttendance && !asksAboutAgePolicy)) return null;
+  return data.procedures.find((entry) => /\b(crianca|criancas|odontopediatria|pediatria)\b/.test(normalizeKnowledgeTerm(entry.name))) ?? null;
 }
 
 export function findStructuredAnswer(message: string, data: KnowledgeData): string | null {
-  const normalizedMessage = normalize(message);
-
-  if (/\b(particular|particulars|privado|sem convenio|sem plano)\b/.test(normalizedMessage)) {
-    return "Sim, realizamos atendimentos particulares. Caso você tenha um convênio, também consultamos os planos cadastrados na clínica.";
+  const planResult = triageInsurancePlan(message, data);
+  if (planResult.kind === "accepted" && !isParticularPlan(planResult.plan)) {
+    const plan = planResult.plan;
+    return plan.instructions ? `Sim, encontramos o plano ${plan.name}. ${plan.instructions}` : `Sim, encontramos o plano ${plan.name} na lista ativa.`;
   }
 
-  const alias = data.aliases.find((entry) => containsTerm(message, entry.alias) || sharesBrandWord(normalizedMessage, normalize(entry.alias)));
-  const plan = alias
-    ? data.plans.find((entry) => entry.id === alias.insurance_plan_id)
-    : data.plans.find((entry) => containsTerm(message, entry.name) || sharesBrandWord(normalizedMessage, normalize(entry.name)));
-  if (plan) return plan.instructions ? `Sim, encontramos o plano ${plan.name}. ${plan.instructions}` : `Sim, encontramos o plano ${plan.name} na lista ativa.`;
-
-  const asksForPlanList = (/\b(quais|lista|todos|planos|convenios)\b/.test(normalizedMessage)
-    && /\b(plano|planos|convenio|convenios)\b/.test(normalizedMessage))
-    || (/\b(aceita|aceitam|aceito|aceitos|atende|atendem|trabalha|trabalham)\b/.test(normalizedMessage)
-    && /\b(plano|planos|convenio|convenios)\b/.test(normalizedMessage));
+  const normalizedMessage = normalizeKnowledgeTerm(message);
+  const asksForPlanList = /\b(plano|planos|convenio|convenios)\b/.test(normalizedMessage)
+    && /\b(quais|lista|todos|aceita|aceitam|aceito|aceitos|atende|atendem|trabalha|trabalham)\b/.test(normalizedMessage);
   if (asksForPlanList && data.plans.length > 0) {
     return `Os planos ativos são: ${data.plans.map((entry) => entry.name).join(", ")}. Também realizamos atendimentos particulares.`;
   }
 
+  const childPolicy = findChildCarePolicy(message, data);
+  if (childPolicy) return `${childPolicy.name}: ${childPolicy.description ?? "Consulte a equipe para detalhes."}`;
+
   const procedure = findRequestedProcedure(message, data);
   if (procedure) return `${procedure.name}: ${procedure.description ?? "Consulte a equipe para detalhes."}${procedure.online_booking ? " O agendamento pode ser iniciado pelo portal." : " A equipe precisa orientar o atendimento."}`;
-  const childProcedure = data.procedures.find((entry) => ["criancas", "odontopediatria", "pediatria"].includes(normalize(entry.name)));
-  if (childProcedure && /\b(crianca|criancas|filho|filha|menor|idade|anos)\b/.test(normalizedMessage)) return `${childProcedure.name}: ${childProcedure.description ?? "Consulte a equipe para detalhes."}`;
-  const asksForProcedureList = /\b(quais|lista|todos)\b/.test(normalizedMessage) && /\b(procedimentos|tratamentos|servicos)\b/.test(normalizedMessage);
-  if (asksForProcedureList && data.procedures.length > 0) return `Os procedimentos cadastrados são: ${data.procedures.map((entry) => entry.name).join(", ")}.`;
-  const faq = data.faqs.find((entry) => normalize(entry.question).split(" ").filter((word) => word.length > 4).some((word) => normalize(message).includes(word)));
-  return faq?.answer ?? null;
+  return null;
 }

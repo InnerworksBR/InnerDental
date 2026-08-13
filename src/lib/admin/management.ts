@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { ManagementCommand } from "@/domain/admin/management";
-import { findAliasConflict, normalizeCatalogTerm } from "@/domain/admin/management";
+import { normalizeCatalogTerm } from "@/domain/admin/management";
 import { maskPhone } from "@/lib/admin/repository";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
@@ -54,7 +54,7 @@ export async function listManagementSnapshot(patientSearch = "") {
   const [procedures, plans, aliases, coverages, professionals, rules, exceptions, faqs, patients, appointments, profiles, audits, authUsers] = await Promise.all([
     client.from("procedures").select("id,name,description,online_booking,active,updated_at").order("name"),
     client.from("insurance_plans").select("id,name,instructions,active,updated_at").order("name"),
-    client.from("insurance_aliases").select("id,insurance_plan_id,alias,active,created_at").order("alias"),
+    client.from("insurance_aliases").select("id,insurance_plan_id,alias,active,is_canonical,created_at").order("alias"),
     client.from("procedure_coverage").select("id,procedure_id,insurance_plan_id,accepted,instructions,updated_at"),
     client.from("professionals").select("id,name,calendar_id,timezone,active,updated_at").order("name"),
     client.from("availability_rules").select("id,professional_id,weekday,start_time,end_time,active").order("weekday").order("start_time"),
@@ -75,7 +75,7 @@ export async function listManagementSnapshot(patientSearch = "") {
     procedures: procedures.data ?? [],
     plans: (plans.data ?? []).map((plan) => ({
       ...plan,
-      aliases: (aliases.data ?? []).filter((alias) => alias.insurance_plan_id === plan.id),
+      aliases: (aliases.data ?? []).filter((alias) => alias.insurance_plan_id === plan.id && !alias.is_canonical),
       coverages: (coverages.data ?? []).filter((coverage) => coverage.insurance_plan_id === plan.id),
     })),
     professionals: (professionals.data ?? []).map((professional) => ({
@@ -116,38 +116,26 @@ async function saveProcedure(command: Extract<ManagementCommand, { action: "save
   return data.id as string;
 }
 
-async function validatePlanAndAliases(command: Extract<ManagementCommand, { action: "save_plan" }>) {
-  await ensureNormalizedName("insurance_plans", command.name, command.id);
-  const client = createSupabaseAdminClient();
-  const [plans, aliases] = await Promise.all([
-    client.from("insurance_plans").select("id,name"),
-    client.from("insurance_aliases").select("id,insurance_plan_id,alias,active"),
-  ]);
-  if (plans.error || aliases.error) throw new Error("MANAGEMENT_READ_FAILED");
-  const conflict = findAliasConflict({ planId: command.id, planName: command.name, proposedAliases: command.aliases, plans: plans.data ?? [], aliases: aliases.data ?? [] });
-  if (conflict) throw new ManagementConflictError(conflict);
-  return aliases.data ?? [];
-}
-
 async function savePlan(command: Extract<ManagementCommand, { action: "save_plan" }>, actorId: string) {
-  const activeAliases = await validatePlanAndAliases(command);
   const values = { name: command.name, instructions: command.instructions, active: command.active };
   const previous = command.id ? await existingRow("insurance_plans", command.id) : null;
   const client = createSupabaseAdminClient();
-  const saved = command.id
-    ? await client.from("insurance_plans").update(values).eq("id", command.id).select("id").single()
-    : await client.from("insurance_plans").insert(values).select("id").single();
-  if (saved.error) throw new Error("PLAN_SAVE_FAILED");
-  const planId = saved.data.id as string;
-  const deactivated = await client.from("insurance_aliases").update({ active: false }).eq("insurance_plan_id", planId).eq("active", true);
-  if (deactivated.error) throw new Error("PLAN_ALIAS_SAVE_FAILED");
-  for (const alias of command.aliases) {
-    const existing = activeAliases.find((entry) => entry.insurance_plan_id === planId && normalizeCatalogTerm(entry.alias) === normalizeCatalogTerm(alias));
-    const result = existing
-      ? await client.from("insurance_aliases").update({ alias, active: true }).eq("id", existing.id)
-      : await client.from("insurance_aliases").insert({ insurance_plan_id: planId, alias, active: true });
-    if (result.error) throw new Error("PLAN_ALIAS_SAVE_FAILED");
+  const saved = await client.rpc("save_insurance_plan_catalog", {
+    p_plan_id: command.id ?? null,
+    p_name: values.name,
+    p_instructions: values.instructions,
+    p_active: values.active,
+    p_aliases: command.aliases,
+  });
+  if (saved.error || !saved.data) {
+    const detail = `${saved.error?.message ?? ""} ${saved.error?.details ?? ""}`;
+    if (/PLAN_(?:ALIAS_DUPLICATE|ALIAS_INVALID|CATALOG_CONFLICT)|duplicate key/i.test(detail)) {
+      throw new ManagementConflictError("ALIAS_JA_UTILIZADO");
+    }
+    if (/PLAN_NOT_FOUND/i.test(detail)) throw new ManagementConflictError("REGISTRO_NAO_ENCONTRADO");
+    throw new Error("PLAN_SAVE_FAILED");
   }
+  const planId = saved.data as string;
   await auditChange({ actorId, entity: "insurance_plans", entityId: planId, action: command.id ? "update" : "insert", fields: [...changedFields(previous, values), "aliases"], metadata: { aliases: command.aliases } });
   return planId;
 }

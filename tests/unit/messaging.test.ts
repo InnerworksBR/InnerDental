@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { classifyIntent, isAccessLinkRequest, isAppointmentStatusRequest, isClinicalQuestion, isExplicitHumanRequest, isGreetingMessage, isProcedureBookingRequest, isTreatmentStatusRequest } from "@/domain/messaging/intent";
 import { whatsappMessageFingerprint } from "@/domain/messaging/fingerprint";
 import { appointmentConfirmationRequestInteractiveMessage, appointmentMessage, caixaInsuranceMessage, dailyConfirmationSummaryMessage, isAutomatedReplyEcho, knowledgeAnswerInteractiveMessage, menuActions, otpMessage, unsupportedInsuranceMessage } from "@/domain/messaging/templates";
-import { findRequestedProcedure, findStructuredAnswer, triageInsurancePlan } from "@/domain/knowledge/service";
+import { assertInsurancePlanCatalog, findRequestedProcedure, findStructuredAnswer, triageInsurancePlan } from "@/domain/knowledge/service";
 import { encryptOtp, decryptOtp } from "@/lib/messaging/otp-cipher";
 import { signEvolutionPayload, verifyEvolutionApiKey, verifyEvolutionSignature } from "@/integrations/evolution/signature";
 import { evolutionWebhookSchema, normalizeFromMeActivity, normalizeIncomingMessage } from "@/integrations/evolution/contract";
@@ -11,9 +12,20 @@ import { generateClinicReply } from "@/integrations/openai/chat";
 import { withBoundedRetry } from "@/lib/reliability/retry";
 import { MessagingWorker } from "../../worker/index";
 
+const testOtpSecret = "unit-test-otp-secret-that-is-at-least-thirty-two-characters";
+const preparedAccessLink = (token: string, phone = "5513999999999", sentAt: string | null = null) => ({
+  encrypted_token: encryptOtp(token, testOtpSecret),
+  phone,
+  token_hash: createHash("sha256").update(token, "utf8").digest("hex"),
+  token_status: "active",
+  expires_at: "2099-01-01T00:00:00.000Z",
+  status: sentAt ? "sent" : "prepared",
+  sent_at: sentAt,
+});
+
 describe("messaging", () => {
   afterEach(() => vi.unstubAllGlobals());
-  it("classifies scheduling and stable menu actions without ever selecting a slot", () => { expect(classifyIntent("Quero remarcar meu horário")).toBe("reschedule"); expect(classifyIntent("Vocês aceitam Unimed?")).toBe("insurance"); expect(classifyIntent(menuActions.agenda)).toBe("schedule"); expect(classifyIntent(menuActions.handoff)).toBe("human"); expect(classifyIntent("texto sem correspondência")).toBe("conversation"); });
+  it("classifies scheduling and stable menu actions without ever selecting a slot", () => { expect(classifyIntent("Quero remarcar meu horário")).toBe("reschedule"); expect(classifyIntent("Vocês aceitam Unimed?")).toBe("insurance"); expect(classifyIntent("Posso pagar a manutenção do aparelho no cartão?")).toBe("faq"); expect(classifyIntent(menuActions.agenda)).toBe("schedule"); expect(classifyIntent(menuActions.handoff)).toBe("human"); expect(classifyIntent("texto sem correspondência")).toBe("conversation"); });
   it("recognizes explicit requests for human service without treating every unknown question as one", () => { expect(isExplicitHumanRequest("Quero falar com a doutora")).toBe(true); expect(isExplicitHumanRequest("Pode me transferir para um atendente?")).toBe(true); expect(isExplicitHumanRequest("A clínica tem estacionamento?")).toBe(false); });
   it("recognizes combined greetings and requests for a replacement access link", () => {
     expect(isGreetingMessage("Olá, bom dia")).toBe(true);
@@ -62,15 +74,15 @@ describe("messaging", () => {
     expect(findStructuredAnswer("Meu filho tem 6 anos, ele pode se consultar?", knowledge)).toContain("menores de 8 anos");
   });
   it("returns null when knowledge has no safe match", () => { expect(findStructuredAnswer("Qual o preço secreto?", { plans: [], aliases: [], procedures: [], faqs: [] })).toBeNull(); });
-  it("accepts registered active plans, brand families, and particular/private consultations during triage", () => {
-    const knowledge = { plans: [{ id: "1", name: "Unimed Odonto", instructions: null }, { id: "2", name: "Amil Dental", instructions: null }], aliases: [{ alias: "Unimed", insurance_plan_id: "1" }] };
+  it("accepts only registered public plan terms and explicit particular consultations during triage", () => {
+    const knowledge = { plans: [{ id: "1", name: "Unimed Odonto", instructions: null }, { id: "2", name: "Amil Dental", instructions: null }, { id: "particular-id", name: "Particular", instructions: null }], aliases: [{ alias: "Unimed", insurance_plan_id: "1" }] };
     expect(triageInsurancePlan("Meu plano é Unimed", knowledge)).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "1" }) }));
-    expect(triageInsurancePlan("Particular", knowledge)).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "particular" }) }));
-    expect(triageInsurancePlan("Não tenho convênio", knowledge)).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "particular" }) }));
+    expect(triageInsurancePlan("Particular", knowledge)).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "particular-id" }) }));
+    expect(triageInsurancePlan("Não tenho convênio", knowledge)).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "particular-id" }) }));
     expect(triageInsurancePlan("Plano inventado", knowledge)).toEqual({ kind: "unsupported" });
   });
-  it("rejects conflicting plan candidates and accepts common unambiguous spellings", () => {
-    const knowledge = {
+  it("rejects catalog conflicts and accepts explicit registered spellings", () => {
+    const invalidCatalog = {
       plans: [
         { id: "bradesco", name: "Bradesco Dental", instructions: null },
         { id: "unna", name: "Rede UNNA", instructions: null },
@@ -81,22 +93,26 @@ describe("messaging", () => {
         { alias: "Tramontano", insurance_plan_id: "transmontano" },
       ],
     };
-    expect(triageInsurancePlan("Bradesco", knowledge)).toEqual({ kind: "ambiguous" });
-    expect(triageInsurancePlan("Tramontano", knowledge)).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "transmontano" }) }));
-    expect(triageInsurancePlan("Dental par", { plans: [{ id: "dentalpar", name: "DentalPar", instructions: null }], aliases: [] })).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "dentalpar" }) }));
+    expect(() => assertInsurancePlanCatalog(invalidCatalog)).toThrow("PLAN_CATALOG_CONFLICT");
+    const catalog = {
+      plans: [{ id: "transmontano", name: "Transmontano", instructions: null }, { id: "dentalpar", name: "DentalPar", instructions: null }],
+      aliases: [{ alias: "Tramontano", insurance_plan_id: "transmontano" }, { alias: "Dental Par", insurance_plan_id: "dentalpar" }],
+    };
+    expect(triageInsurancePlan("Tramontano", catalog)).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "transmontano" }) }));
+    expect(triageInsurancePlan("Dental par", catalog)).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "dentalpar" }) }));
   });
-  it("never selects the first of multiple matching plan families", () => {
+  it("does not turn a partial brand into a plan identity", () => {
     expect(triageInsurancePlan("Meu plano é Unimed", {
       plans: [
         { id: "unimed-odonto", name: "Unimed Odonto", instructions: null },
         { id: "unimed-dental", name: "Unimed Dental", instructions: null },
       ],
       aliases: [],
-    })).toEqual({ kind: "ambiguous" });
+    })).toEqual({ kind: "unsupported" });
   });
-  it("accepts active catalog plans containing Caixa while rejecting unregistered Caixa plans", () => {
+  it("does not equate an unknown plan term with a rejection", () => {
     expect(triageInsurancePlan("Caixa de Pecúlio", { plans: [{ id: "1", name: "Caixa de Pecúlio", instructions: null }], aliases: [] })).toEqual(expect.objectContaining({ kind: "accepted", plan: expect.objectContaining({ id: "1" }) }));
-    expect(triageInsurancePlan("meu convênio é caixa saúde", { plans: [], aliases: [] })).toEqual({ kind: "caixa" });
+    expect(triageInsurancePlan("meu convênio é caixa saúde", { plans: [], aliases: [] })).toEqual({ kind: "unsupported" });
   });
   it("uses professional plan responses without naming a professional or forcing a generic CTA", () => {
     expect(`${unsupportedInsuranceMessage} ${caixaInsuranceMessage}`).not.toMatch(/tarc[ií]lia/i);
@@ -184,13 +200,15 @@ describe("messaging", () => {
   });
   it("exposes health state and stops safely", () => { const worker = new MessagingWorker({} as never, {} as never, { pollMs: 100, healthPort: 3001 } as never); expect(worker.healthy()).toBe(true); worker.stop(); expect(worker.healthy()).toBe(false); });
   it("asks for the plan only when a new booking has no known plan", async () => {
-    const sessions: Record<string, unknown>[] = [];
     const updates: Record<string, unknown>[] = [];
+    const transitions: Record<string, unknown>[] = [];
     const knowledgeTable = (data: unknown[] = []) => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data, error: null }) }) });
-    const db = { from: (table: string) => {
+    const db = { rpc: vi.fn().mockImplementation(async (name: string, value: Record<string, unknown>) => {
+      if (name === "transition_whatsapp_plan_triage") { transitions.push(value); return { data: true, error: null }; }
+      return { data: null, error: null };
+    }), from: (table: string) => {
       if (table === "whatsapp_plan_triage_sessions") return {
         select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }) }),
-        upsert: vi.fn().mockImplementation(async (values: Record<string, unknown>) => { sessions.push(values); return { error: null }; }),
       };
       if (table === "patients") return { select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }) }) };
       if (["insurance_plans", "insurance_aliases", "procedures", "procedure_coverage", "faq_entries"].includes(table)) return knowledgeTable();
@@ -201,15 +219,31 @@ describe("messaging", () => {
     const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000030", phone: "5513999999999", message_text: "quero marcar", attempts: 1 });
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", "Qual é o seu plano odontológico?");
-    expect(sessions).toContainEqual(expect.objectContaining({ status: "awaiting_plan", pending_message: "quero marcar" }));
+    expect(transitions).toContainEqual(expect.objectContaining({ p_action: "replace", p_pending_message: "quero marcar" }));
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "plan_requested" }));
   });
-  it("uses a short procedure-plan-link flow without extra conversation", async () => {
+  it("lets a new question end a pending procedure-plan flow", async () => {
     let session: Record<string, unknown> | null = null;
     const updates: Record<string, unknown>[] = [];
     const accessTokenInsert = vi.fn().mockResolvedValue({ error: null });
     const knowledgeTable = (data: unknown[] = []) => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data, error: null }) }) });
-    const db = { from: (table: string) => {
+    const rpc = vi.fn().mockImplementation(async (name: string, value: Record<string, unknown>) => {
+      if (name === "transition_whatsapp_plan_triage") {
+        if (value.p_action === "replace") {
+          session = {
+            status: "awaiting_plan",
+            pending_message: value.p_pending_message,
+            prompted_by_inbox_id: value.p_prompted_by_inbox_id,
+            expires_at: "2099-01-01T00:00:00.000Z",
+          };
+        }
+        if (value.p_action === "reject" && session) session = { ...session, status: "rejected" };
+        return { data: true, error: null };
+      }
+      if (name === "enqueue_human_handoff") return { data: "00000000-0000-4000-8000-000000000099", error: null };
+      return { data: null, error: null };
+    });
+    const db = { rpc, from: (table: string) => {
       if (table === "whatsapp_plan_triage_sessions") return {
         select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockImplementation(async () => ({ data: session, error: null })) }) }),
         upsert: vi.fn().mockImplementation(async (values: Record<string, unknown>) => { session = values; return { error: null }; }),
@@ -233,46 +267,50 @@ describe("messaging", () => {
     expect(accessTokenInsert).not.toHaveBeenCalled();
 
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000046", phone: "5513999999999", message_text: "Nesse caso eu gostaria, sim. Quais dias estão disponíveis?", attempts: 1 });
-    expect(evolution.sendText).toHaveBeenNthCalledWith(2, "5513999999999", "Qual é o seu plano odontológico?");
+    expect(evolution.sendText).toHaveBeenNthCalledWith(2, "5513999999999", expect.not.stringContaining("plano odontológico"));
     expect(accessTokenInsert).not.toHaveBeenCalled();
 
-    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000047", phone: "5513999999999", message_text: "Amil Dental", attempts: 1 });
-    expect(evolution.sendText).toHaveBeenNthCalledWith(3, "5513999999999", expect.stringMatching(/agenda\.example\/acesso#token=/));
-    expect(accessTokenInsert).toHaveBeenCalledOnce();
-    expect(updates).toContainEqual(expect.objectContaining({ classified_intent: "procedure", processed_action: "portal_link" }));
+    expect(accessTokenInsert).not.toHaveBeenCalled();
+    expect(updates).not.toContainEqual(expect.objectContaining({ processed_action: "plan_rejected" }));
   });
   it("issues a fresh secure link deterministically when the previous link was lost", async () => {
     const updates: Record<string, unknown>[] = [];
-    const accessTokens: Record<string, unknown>[] = [];
-    const db = { from: (table: string) => {
+    const preparedLinks: Record<string, unknown>[] = [];
+    const db = { rpc: vi.fn().mockImplementation(async (name: string, value: Record<string, unknown>) => {
+      if (name === "prepare_whatsapp_access_link") {
+        preparedLinks.push(value);
+        return { data: preparedAccessLink("replacement-link"), error: null };
+      }
+      if (name === "mark_whatsapp_access_link_delivered") return { data: true, error: null };
+      return { data: null, error: null };
+    }), from: (table: string) => {
       if (table === "whatsapp_plan_triage_sessions") return { select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }) }) };
-      if (table === "access_tokens") return { insert: vi.fn().mockImplementation(async (values: Record<string, unknown>) => { accessTokens.push(values); return { error: null }; }) };
       return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
     } };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
-    const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
-    const issuedAt = Date.now();
+    const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", otpSecret: testOtpSecret, pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000044", phone: "5513999999999", message_text: "OK. Mande-me o link", attempts: 1 });
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/agenda\.example\/acesso#token=/));
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("expira em 24 horas"));
     expect(evolution.sendText).not.toHaveBeenCalledWith("5513999999999", expect.stringContaining("link.de.agendamento"));
-    const expiresAt = new Date(String(accessTokens[0]?.expires_at)).getTime();
-    expect(expiresAt).toBeGreaterThanOrEqual(issuedAt + 24 * 60 * 60_000);
-    expect(expiresAt).toBeLessThanOrEqual(Date.now() + 24 * 60 * 60_000);
+    expect(preparedLinks).toEqual([expect.objectContaining({ p_source_inbox_id: "00000000-0000-4000-8000-000000000044" })]);
     expect(updates).toContainEqual(expect.objectContaining({ classified_intent: "schedule", processed_action: "portal_link" }));
   });
   it("answers an existing appointment question without asking for a plan", async () => {
     const updates: Record<string, unknown>[] = [];
-    const rpc = vi.fn().mockImplementation(async (name: string) => name === "get_upcoming_appointment_by_phone"
-      ? { data: { status: "found", start_at: "2099-08-02T18:00:00.000Z", professional_name: "Dra. Priscila" }, error: null }
-      : { data: null, error: null });
+    const rpc = vi.fn().mockImplementation(async (name: string) => {
+      if (name === "get_upcoming_appointment_by_phone") return { data: { status: "found", start_at: "2099-08-02T18:00:00.000Z", professional_name: "Dra. Priscila" }, error: null };
+      if (name === "prepare_whatsapp_access_link") return { data: preparedAccessLink("appointment-link"), error: null };
+      if (name === "mark_whatsapp_access_link_delivered") return { data: true, error: null };
+      return { data: null, error: null };
+    });
     const db = { rpc, from: (table: string) => {
       if (table === "whatsapp_plan_triage_sessions") return { select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }) }) };
       if (table === "access_tokens") return { insert: vi.fn().mockResolvedValue({ error: null }) };
       return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
     } };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
-    const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", otpSecret: testOtpSecret, pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000040", phone: "5513999999999", message_text: "Para quando ficou marcada minha próxima consulta para colocar as próteses?", attempts: 1 });
     expect(rpc).toHaveBeenCalledWith("get_upcoming_appointment_by_phone", { p_phone: "5513999999999" });
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/próxima consulta[\s\S]*Dra\. Priscila/i));
@@ -282,7 +320,11 @@ describe("messaging", () => {
   it("reuses the active plan already stored for a patient", async () => {
     const updates: Record<string, unknown>[] = [];
     const sessionUpsert = vi.fn();
-    const db = { from: (table: string) => {
+    const db = { rpc: vi.fn().mockImplementation(async (name: string) => {
+      if (name === "prepare_whatsapp_access_link") return { data: preparedAccessLink("active-plan-link"), error: null };
+      if (name === "mark_whatsapp_access_link_delivered") return { data: true, error: null };
+      return { data: null, error: null };
+    }), from: (table: string) => {
       if (table === "whatsapp_plan_triage_sessions") return {
         select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }) }),
         upsert: sessionUpsert,
@@ -293,7 +335,7 @@ describe("messaging", () => {
       return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
     } };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
-    const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", otpSecret: testOtpSecret, pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000041", phone: "5513999999999", message_text: "Quero marcar uma consulta", attempts: 1 });
     expect(sessionUpsert).not.toHaveBeenCalled();
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("https://agenda.example/acesso#token="));
@@ -327,60 +369,66 @@ describe("messaging", () => {
     expect(evolution.sendText).not.toHaveBeenCalled();
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "ignored", last_error: "agent_paused" }));
   });
-  it("ends plan triage immediately for Caixa without creating a handoff", async () => {
-    const sessions: Record<string, unknown>[] = [];
+  it("ends a pending plan triage for an unknown message instead of rejecting it as a plan", async () => {
     const updates: Record<string, unknown>[] = [];
-    const rpc = vi.fn();
+    const rpc = vi.fn().mockImplementation(async (name: string) => name === "transition_whatsapp_plan_triage"
+      ? { data: true, error: null }
+      : { data: "00000000-0000-4000-8000-000000000099", error: null });
     const knowledgeTable = (data: unknown[] = []) => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data, error: null }) }) });
     const db = { rpc, from: (table: string) => {
       if (table === "whatsapp_plan_triage_sessions") return {
         select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: { status: "awaiting_plan", pending_message: "quero marcar", prompted_by_inbox_id: "00000000-0000-4000-8000-000000000030", expires_at: "2099-01-01T00:00:00.000Z" }, error: null }) }) }),
-        upsert: vi.fn().mockImplementation(async (values: Record<string, unknown>) => { sessions.push(values); return { error: null }; }),
       };
       if (["insurance_plans", "insurance_aliases", "procedures", "procedure_coverage", "faq_entries"].includes(table)) return knowledgeTable();
       return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
     } };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
     const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
-    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000031", phone: "5513999999999", message_text: "Caixa de Pecúlio", attempts: 1 });
-    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/Caixa[\s\S]*não são mais atendidos pela clínica/i));
-    expect(sessions).toContainEqual(expect.objectContaining({ status: "rejected" }));
-    expect(updates).toContainEqual(expect.objectContaining({ processed_action: "plan_rejected_caixa" }));
-    expect(rpc).not.toHaveBeenCalled();
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000031", phone: "5513999999999", message_text: "Jonathan Dos Reis Santos", attempts: 1 });
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000033", phone: "5513999999999", message_text: "Priscilla de Moraes Queiroz", attempts: 1 });
+    expect(evolution.sendText).not.toHaveBeenCalledWith("5513999999999", unsupportedInsuranceMessage);
+    expect(rpc).toHaveBeenCalledWith("transition_whatsapp_plan_triage", expect.objectContaining({ p_action: "reject" }));
+    expect(updates).not.toContainEqual(expect.objectContaining({ processed_action: "plan_rejected" }));
+    expect(rpc).toHaveBeenCalledWith("enqueue_human_handoff", expect.objectContaining({ p_phone: "5513999999999" }));
   });
   it("resumes the original request only after an active plan is accepted", async () => {
-    const sessions: Record<string, unknown>[] = [];
-    const patients: Record<string, unknown>[] = [];
     const updates: Record<string, unknown>[] = [];
     const knowledgeTable = (data: unknown[] = []) => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data, error: null }) }) });
-    const db = { from: (table: string) => {
+    const rpc = vi.fn().mockImplementation(async (name: string) => {
+      if (name === "accept_whatsapp_plan_triage") return { data: true, error: null };
+      if (name === "prepare_whatsapp_access_link") return { data: preparedAccessLink("accepted-plan-link"), error: null };
+      if (name === "mark_whatsapp_access_link_delivered") return { data: true, error: null };
+      return { data: null, error: null };
+    });
+    const db = { rpc, from: (table: string) => {
       if (table === "whatsapp_plan_triage_sessions") return {
         select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: { status: "awaiting_plan", pending_message: "quero marcar", prompted_by_inbox_id: "00000000-0000-4000-8000-000000000030", expires_at: "2099-01-01T00:00:00.000Z" }, error: null }) }) }),
-        upsert: vi.fn().mockImplementation(async (values: Record<string, unknown>) => { sessions.push(values); return { error: null }; }),
       };
       if (table === "insurance_plans") return knowledgeTable([{ id: "plan-1", name: "Unimed Odonto", instructions: null }]);
       if (["insurance_aliases", "procedures", "procedure_coverage", "faq_entries"].includes(table)) return knowledgeTable();
       if (table === "access_tokens") return { insert: vi.fn().mockResolvedValue({ error: null }) };
-      if (table === "patients") return { upsert: vi.fn().mockImplementation(async (values: Record<string, unknown>) => { patients.push(values); return { error: null }; }) };
       return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
     } };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
-    const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
-    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000032", phone: "5513999999999", message_text: "Unimed", attempts: 1 });
+    const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", otpSecret: testOtpSecret, pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000032", phone: "5513999999999", message_text: "Unimed Odonto", attempts: 1 });
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("https://agenda.example/acesso#token="));
-    expect(sessions).toContainEqual(expect.objectContaining({ status: "accepted", insurance_plan_id: "plan-1" }));
-    expect(patients).toContainEqual(expect.objectContaining({ phone: "5513999999999", insurance_plan_id: "plan-1" }));
+    expect(rpc).toHaveBeenCalledWith("accept_whatsapp_plan_triage", expect.objectContaining({ p_phone: "5513999999999", p_insurance_plan_id: "plan-1" }));
     expect(updates).toContainEqual(expect.objectContaining({ classified_intent: "schedule", processed_action: "portal_link" }));
   });
   it("persists an allowed action after sending a scheduling reply", async () => {
     const updates: Record<string, unknown>[] = [];
-    const db = {
+    const db = { rpc: vi.fn().mockImplementation(async (name: string) => {
+      if (name === "prepare_whatsapp_access_link") return { data: preparedAccessLink("scheduling-link"), error: null };
+      if (name === "mark_whatsapp_access_link_delivered") return { data: true, error: null };
+      return { data: null, error: null };
+    }),
       from: (table: string) => table === "access_tokens"
         ? { insert: vi.fn().mockResolvedValue({ error: null }) }
         : { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) },
     };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
-    const worker = new MessagingWorker(db as never, evolution as never, { portalBaseUrl: "https://agenda.example", openaiModel: "gpt-4o-mini", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    const worker = new MessagingWorker(db as never, evolution as never, { portalBaseUrl: "https://agenda.example", otpSecret: testOtpSecret, openaiModel: "gpt-4o-mini", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000001", phone: "5513999999999", message_text: "quero marcar", attempts: 1 });
     expect(evolution.sendText).toHaveBeenCalledTimes(1);
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("https://agenda.example/acesso#token="));
@@ -451,18 +499,24 @@ describe("messaging", () => {
   });
   it("sends the secure scheduling link when the person asks to book a registered online procedure", async () => {
     const updates: Record<string, unknown>[] = [];
-    const accessTokenInsert = vi.fn().mockResolvedValue({ error: null });
+    const preparedLinks: Record<string, unknown>[] = [];
     const knowledgeTable = (data: unknown[] = []) => ({ select: () => ({ eq: vi.fn().mockResolvedValue({ data, error: null }) }) });
-    const db = { from: (table: string) => {
+    const db = { rpc: vi.fn().mockImplementation(async (name: string, value: Record<string, unknown>) => {
+      if (name === "prepare_whatsapp_access_link") {
+        preparedLinks.push(value);
+        return { data: preparedAccessLink("procedure-link"), error: null };
+      }
+      if (name === "mark_whatsapp_access_link_delivered") return { data: true, error: null };
+      return { data: null, error: null };
+    }), from: (table: string) => {
       if (table === "procedures") return knowledgeTable([{ name: "Limpeza", description: "Avaliação inicial.", online_booking: true }]);
       if (["insurance_plans", "insurance_aliases", "procedure_coverage", "faq_entries"].includes(table)) return knowledgeTable();
-      if (table === "access_tokens") return { insert: accessTokenInsert };
       return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
     } };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
-    const worker = new MessagingWorker(db as never, evolution as never, { portalBaseUrl: "https://agenda.example", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    const worker = new MessagingWorker(db as never, evolution as never, { portalBaseUrl: "https://agenda.example", otpSecret: testOtpSecret, pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000014", phone: "5513999999999", message_text: "Gostaria de fazer uma limpeza", attempts: 1 });
-    expect(accessTokenInsert).toHaveBeenCalledOnce();
+    expect(preparedLinks).toEqual([expect.objectContaining({ p_source_inbox_id: "00000000-0000-4000-8000-000000000014" })]);
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/Agendar consulta[\s\S]*agenda\.example\/acesso#token=/));
     expect(updates).toContainEqual(expect.objectContaining({ classified_intent: "procedure", processed_action: "portal_link" }));
   });
@@ -526,7 +580,7 @@ describe("messaging", () => {
     } };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
     const worker = new MessagingWorker(db as never, evolution as never, { pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
-    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000016", phone: "5513999999999", message_text: "Vocês aceitam Unimed?", attempts: 1 });
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000016", phone: "5513999999999", message_text: "Vocês aceitam Unimed Odonto e Unimed Dental?", attempts: 1 });
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/mais de um plano/i));
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "structured_answer" }));
   });
@@ -614,10 +668,13 @@ describe("messaging", () => {
     expect(updates).toContainEqual(expect.objectContaining({ status: "sent" }));
   });
   it("finalizes a leased inbox message through the atomic RPC", async () => {
-    const rpc = vi.fn().mockResolvedValue({ data: true, error: null });
+    const rpc = vi.fn().mockImplementation(async (name: string) => {
+      if (name === "prepare_whatsapp_access_link") return { data: preparedAccessLink("leased-link"), error: null };
+      return { data: true, error: null };
+    });
     const db = { rpc, from: () => ({ insert: vi.fn().mockResolvedValue({ error: null }) }) };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
-    const worker = new MessagingWorker(db as never, evolution as never, { portalBaseUrl: "https://agenda.example", openaiModel: "gpt-4o-mini", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
+    const worker = new MessagingWorker(db as never, evolution as never, { portalBaseUrl: "https://agenda.example", otpSecret: testOtpSecret, openaiModel: "gpt-4o-mini", pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000003", phone: "5513999999999", message_text: "quero marcar", attempts: 1, lease_token: "00000000-0000-4000-8000-000000000004" });
     expect(rpc).toHaveBeenCalledWith("finish_whatsapp_inbox_leased", expect.objectContaining({ final_status: "processed", action: "portal_link", dead_letter: false }));
   });

@@ -21,10 +21,13 @@ export function isProcedureBookingRequest(message: string): boolean {
     && /\b(fazer|realizar)\b/.test(text);
   return asksToBook || wantsProcedure;
 }
+export function isPaymentQuestion(message: string): boolean {
+  return /\b(pagamento|pagar|cartao|credito|debito|pix|parcelar)\b/.test(normalized(message));
+}
 export function isAccessLinkRequest(message: string): boolean {
   const text = normalized(message);
   const mentionsAccess = /\b(link|acesso|agenda)\b/.test(text);
-  const asksForAnother = /\b(perdi|perdeu|perdemos|nao abre|nao funciona|venceu|expirou|mand[ae]|mandar|envi[ae]|enviar|pass[ae]|passar|quero|gostaria|preciso|pode|novo|novamente|de novo|qual|cad[eê]|onde esta)\b/.test(text);
+  const asksForAnother = /\b(perdi|perdeu|perdemos|nao (?:possuo|tenho|recebi|abre|funciona)|nao recebi|venceu|expirou|mand[ae]|mandar|envi[ae]|enviar|pass[ae]|passar|quero|gostaria|preciso|pode|novo|novamente|de novo|qual|cad[eê]|onde esta)\b/.test(text);
   return mentionsAccess && asksForAnother;
 }
 export function isGreetingMessage(message: string): boolean {
@@ -65,7 +68,7 @@ export function classifyIntent(message: string): MessageIntent {
   if (/\b(remarcar|reagendar|mudar.*horario)\b/.test(text)) return "reschedule";
   if (/\b(cancelar|desmarcar)\b/.test(text)) return "cancel";
   if (/\b(confirmo|confirmar(?: minha)? presenca|vou comparecer|estarei presente)\b/.test(text)) return "confirm";
-  if (/\b(endereco|localizacao|onde fica|qual.*sala|sala.*qual|horario de funcionamento|funcionamento|documentos|pagamento|estacionamento)\b/.test(text)) return "faq";
+  if (/\b(endereco|localizacao|onde fica|qual.*sala|sala.*qual|horario de funcionamento|funcionamento|documentos|pagamento|pagar|cartao|credito|debito|pix|parcelar|estacionamento)\b/.test(text)) return "faq";
   if (/\b(procedimento|tratamento|limpeza|profilaxia|clareamento|canal|implante|protese|ortodontia|aparelho|extracao|extrair|siso|urgencia|odontopediatria)\b/.test(text)) return "procedure";
   if (/\b(marcar|marca|marque|agendar|agenda|agende|consulta|horario)\b/.test(text)) return "schedule";
   if (/\b(plano|convenio|aceit\w*|cobertura)\b/.test(text)) return "insurance";

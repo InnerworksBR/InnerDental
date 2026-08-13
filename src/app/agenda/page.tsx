@@ -69,7 +69,10 @@ export default function AgendaPage() {
   const effectiveDate = visibleDays.some((day) => day.date === date) ? date : visibleDays[0]?.date ?? date;
   const slots = visibleDays.find((day) => day.date === effectiveDate)?.slots ?? [];
   const selectedProfessional = professionals.find((professional) => professional.id === professionalId);
-  const needsProfile = !editing && profile?.complete === false;
+  const needsPatientName = !editing && !profile?.name;
+  const needsInsurancePlan = !editing && !profile?.insurancePlanId;
+  const needsProfile = needsPatientName || needsInsurancePlan;
+  const profileInputComplete = (!needsPatientName || patientName.trim().length >= 2) && (!needsInsurancePlan || Boolean(insurancePlanId));
 
   function applyData(data: AgendaData) {
     setAppointments(data.appointments);
@@ -142,7 +145,7 @@ export default function AgendaPage() {
   }
 
   async function save() {
-    if (!professionalId || !selectedTime || (needsProfile && (!patientName.trim() || !insurancePlanId)) || (!editing && partySize === 2 && companionName.trim().length < 2)) return;
+    if (!professionalId || !selectedTime || !profileInputComplete || (!editing && partySize === 2 && companionName.trim().length < 2)) return;
     setSaving(true);
     setNotice("");
     try {
@@ -158,7 +161,7 @@ export default function AgendaPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(editing
           ? { holdId, date: effectiveDate, time: selectedTime, idempotencyKey: idempotencyKey() }
-          : { holdId, professionalId, date: effectiveDate, time: selectedTime, partySize, companionName: partySize === 2 ? companionName.trim() : undefined, patientName: needsProfile ? patientName.trim() : undefined, insurancePlanId: needsProfile ? insurancePlanId : undefined, idempotencyKey: idempotencyKey() }),
+          : { holdId, professionalId, date: effectiveDate, time: selectedTime, partySize, companionName: partySize === 2 ? companionName.trim() : undefined, patientName: needsPatientName ? patientName.trim() : undefined, insurancePlanId: needsInsurancePlan ? insurancePlanId : undefined, idempotencyKey: idempotencyKey() }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
@@ -197,7 +200,7 @@ export default function AgendaPage() {
         <p className="eyebrow">{editing ? "Remarcar consulta" : "Nova consulta"}</p>
         <h1>Escolha um horário disponível</h1>
         {notice && <p className="notice" role="status">{notice}</p>}
-        {needsProfile && <fieldset className="profile-fields"><legend>Antes de continuar, conte um pouco sobre você</legend><label htmlFor="patient-name">Nome completo</label><input id="patient-name" value={patientName} onChange={(event) => setPatientName(event.target.value)} placeholder="Como podemos te chamar?" required /><label htmlFor="insurance-plan">Plano odontológico</label><select id="insurance-plan" value={insurancePlanId} onChange={(event) => setInsurancePlanId(event.target.value)} required><option value="">Selecione seu plano</option>{plans.map((plan) => <option value={plan.id} key={plan.id}>{plan.name}</option>)}</select><small>Se tiver dúvidas sobre a cobertura, a equipe confirma antes do atendimento.</small></fieldset>}
+        {needsProfile && <fieldset className="profile-fields"><legend>Antes de continuar, conte um pouco sobre você</legend>{needsPatientName && <><label htmlFor="patient-name">Nome completo</label><input id="patient-name" value={patientName} onChange={(event) => setPatientName(event.target.value)} placeholder="Como podemos te chamar?" required /></>}{needsInsurancePlan && <><label htmlFor="insurance-plan">Plano odontológico</label><select id="insurance-plan" value={insurancePlanId} onChange={(event) => setInsurancePlanId(event.target.value)} required><option value="">Selecione seu plano</option>{plans.map((plan) => <option value={plan.id} key={plan.id}>{plan.name}</option>)}</select></>}<small>Se tiver dúvidas sobre a cobertura, a equipe confirma antes do atendimento.</small></fieldset>}
         <strong className="booking-label">Profissional</strong>
         <div className="professional-list">{professionals.map((item) => <button type="button" className={`professional-option ${professionalId === item.id ? "chosen" : ""}`} key={item.id} onClick={() => setProfessionalId(item.id)}><span>{initials(item.name)}</span><i><b>{item.name}</b><small>Atendimento odontológico</small></i><em /></button>)}</div>
         {editing ? <p className="party-summary">Esta consulta reserva {bookingPartySize === 2 ? "dois horários consecutivos (30 minutos)" : "um horário (15 minutos)"}.</p> : <fieldset className="party-fields"><legend>Outra pessoa também vai se consultar junto?</legend><div className="party-options"><button type="button" aria-pressed={partySize === 1} className={partySize === 1 ? "chosen" : ""} onClick={() => { setPartySize(1); setCompanionName(""); setSelectedTime(""); }}>Não, somente eu</button><button type="button" aria-pressed={partySize === 2} className={partySize === 2 ? "chosen" : ""} onClick={() => { setPartySize(2); setSelectedTime(""); }}>Sim, duas pessoas</button></div>{partySize === 2 && <><label htmlFor="companion-name">Nome da segunda pessoa</label><input id="companion-name" value={companionName} onChange={(event) => setCompanionName(event.target.value)} placeholder="Nome completo" minLength={2} maxLength={160} required /><small>Vamos reservar dois horários consecutivos. Esse nome ficará somente no evento desta consulta.</small></>}</fieldset>}
@@ -211,7 +214,7 @@ export default function AgendaPage() {
         <div className="slot-grid">{slots.map((slot) => { const value = hour(slot.startAt); return <button type="button" className={selectedTime === value ? "slot selected" : "slot"} onClick={() => setSelectedTime(value)} key={slot.startAt}>{value}</button>; })}</div>
         {selectedTime && <p className="notice">{selectedProfessional?.name} · {selectedTime} · {bookingPartySize === 2 ? "2 pessoas · 30 minutos" : "15 minutos"}</p>}
         {notOnlineBookableProcedures.length > 0 && <aside className="booking-limitations" aria-labelledby="booking-limitations-title"><h2 id="booking-limitations-title">Antes de confirmar</h2><p>Estes atendimentos não são marcados diretamente pelo portal:</p><ul>{notOnlineBookableProcedures.map((procedure) => <li key={procedure.id}><b>{procedure.name}</b>{procedure.description && <span>{procedure.description}</span>}</li>)}</ul><p>Se precisar de um deles, fale com a equipe.</p></aside>}
-        <button type="button" className="button booking-confirm" disabled={!selectedTime || saving || (needsProfile && (!patientName.trim() || !insurancePlanId)) || (!editing && partySize === 2 && companionName.trim().length < 2)} onClick={() => void save()}>{saving ? "Confirmando…" : editing ? "Confirmar remarcação" : "Confirmar consulta"}</button>
+        <button type="button" className="button booking-confirm" disabled={!selectedTime || saving || !profileInputComplete || (!editing && partySize === 2 && companionName.trim().length < 2)} onClick={() => void save()}>{saving ? "Confirmando…" : editing ? "Confirmar remarcação" : "Confirmar consulta"}</button>
       </section>
     </PortalShell>
   );
