@@ -30,15 +30,46 @@ export type InsurancePlanTriageResult =
 
 type PlanTerm = { term: string; plan: KnowledgeData["plans"][number] };
 
+/**
+ * Public, patient-facing spellings of each plan. `containsExactTerm` already
+ * requires a word boundary on both sides, so the head (first token) of every
+ * multi-word name is a safe prefix matcher: "Bradesco" still matches
+ * "Bradesco Dental" but never "Bradescolar" or "BradescoDental" without a
+ * space. Single-word plans (e.g. "Particular") keep only their full term so
+ * "particular" never matches the unrelated word "particularidade".
+ */
+function planTermVariants(plan: KnowledgeData["plans"][number]): string[] {
+  const variants: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: string) => {
+    if (value.length === 0 || seen.has(value)) return;
+    seen.add(value);
+    variants.push(value);
+  };
+  const full = normalizeKnowledgeTerm(plan.name);
+  push(full);
+  if (full.includes(" ")) {
+    const head = full.split(" ", 1)[0]!;
+    if (head.length >= 4) push(head);
+  }
+  return variants;
+}
+
 function publicPlanTerms(data: Pick<KnowledgeData, "plans" | "aliases">): PlanTerm[] {
   const byId = new Map(data.plans.map((plan) => [plan.id, plan]));
-  return [
-    ...data.plans.map((plan) => ({ term: normalizeKnowledgeTerm(plan.name), plan })),
-    ...data.aliases.flatMap((alias) => {
-      const plan = byId.get(alias.insurance_plan_id);
-      return plan ? [{ term: normalizeKnowledgeTerm(alias.alias), plan }] : [];
-    }),
-  ].filter(({ term }) => term.length > 0);
+  const terms: PlanTerm[] = [];
+  for (const plan of data.plans) for (const term of planTermVariants(plan)) terms.push({ term, plan });
+  for (const alias of data.aliases) {
+    const plan = byId.get(alias.insurance_plan_id);
+    if (!plan) continue;
+    const aliasName = normalizeKnowledgeTerm(alias.alias);
+    if (aliasName) terms.push({ term: aliasName, plan });
+    if (aliasName.includes(" ")) {
+      const head = aliasName.split(" ", 1)[0]!;
+      if (head.length >= 4) terms.push({ term: head, plan });
+    }
+  }
+  return terms;
 }
 
 /**
@@ -89,8 +120,18 @@ export function isParticularPlan(plan: Pick<KnowledgeData["plans"][number], "nam
   return normalizeKnowledgeTerm(plan.name) === "particular";
 }
 
+function planTermConflicts(data: Pick<KnowledgeData, "plans" | "aliases">): Set<string> {
+  const owners = new Map<string, Set<string>>();
+  for (const { term, plan } of publicPlanTerms(data)) {
+    const ids = owners.get(term) ?? new Set<string>();
+    ids.add(plan.id);
+    owners.set(term, ids);
+  }
+  return new Set([...owners.entries()].filter(([, ids]) => ids.size > 1).map(([term]) => term));
+}
+
 export function triageInsurancePlan(message: string, data: Pick<KnowledgeData, "plans" | "aliases">): InsurancePlanTriageResult {
-  assertInsurancePlanCatalog(data);
+  const conflicts = planTermConflicts(data);
   if (isParticularAnswer(message) || isParticularAnswer(planAnswer(message))) {
     // Particular is a first-class plan record. Returning a synthetic identifier
     // would let the worker send a link before it can persist valid patient state.
@@ -98,9 +139,18 @@ export function triageInsurancePlan(message: string, data: Pick<KnowledgeData, "
     return plan ? { kind: "accepted", plan } : { kind: "unsupported" };
   }
 
+  // Conflicting public terms (e.g. two active plans that both own the head
+  // "Unimed") are catalog bugs the migration prevents, but if a partially
+  // migrated dataset reaches the worker, we drop the ambiguous term here
+  // instead of failing every patient message. The dedicated assert still
+  // throws for hot paths that must fail closed.
+  const terms = conflicts.size > 0
+    ? publicPlanTerms(data).filter(({ term }) => !conflicts.has(term))
+    : publicPlanTerms(data);
+
   const answer = planAnswer(message);
   const matchingPlans = [...new Map(
-    publicPlanTerms(data)
+    terms
       .filter(({ term }) => term === answer || containsExactTerm(message, term))
       .map(({ plan }) => [plan.id, plan]),
   ).values()];
@@ -125,7 +175,13 @@ export function isExplicitInsurancePlanAnswer(message: string, data: Pick<Knowle
 
   const answer = planAnswer(message);
   if (isParticularAnswer(message) || isParticularAnswer(answer)) return true;
-  return publicPlanTerms(data).some(({ term, plan }) => plan.id === result.plan.id && term === answer);
+  // `publicPlanTerms` now exposes both the full term and the first-word head
+  // (≥4 letters) of every multi-word plan or alias. Accept the answer when the
+  // normalized reply matches any registered public spelling for the matched
+  // plan, so "Bradesco" or "OdontoPrev" are valid replies without forcing the
+  // patient to retype the full alias registered on the back office.
+  const allowedForPlan = new Set(publicPlanTerms(data).filter(({ plan }) => plan.id === result.plan.id).map(({ term }) => term));
+  return allowedForPlan.has(answer);
 }
 
 export function findRequestedProcedure(message: string, data: Pick<KnowledgeData, "procedures">): KnowledgeData["procedures"][number] | null {

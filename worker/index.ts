@@ -37,7 +37,7 @@ import {
   type InteractiveMessage,
   type DailyConfirmationSummary,
 } from "../src/domain/messaging/templates.ts";
-import { assertInsurancePlanCatalog, findRequestedProcedure, isExplicitInsurancePlanAnswer, isParticularPlan, triageInsurancePlan, type KnowledgeData } from "../src/domain/knowledge/service.ts";
+import { findRequestedProcedure, isExplicitInsurancePlanAnswer, isParticularPlan, triageInsurancePlan, type KnowledgeData } from "../src/domain/knowledge/service.ts";
 import { resolveVerifiedFacts } from "../src/domain/knowledge/verified-facts.ts";
 import { generateClinicReply } from "../src/integrations/openai/chat.ts";
 import { isCorrelationId, log } from "../src/lib/observability/logger.ts";
@@ -543,7 +543,12 @@ export class MessagingWorker {
             instructions: facts.coverage.instructions,
           }));
           if (facts.coverage.status !== "accepted") handoff = true;
-          else if (facts.procedure.online_booking && isProcedureBookingRequest(messageText)) {
+          else if (facts.procedure.online_booking) {
+            // A confirmed coverage + online-bookable procedure is enough to
+            // hand the secure portal link. The patient is not required to
+            // also type "marcar" — that pattern made the bot describe the
+            // procedure but never issue a link, which patients read as
+            // "não está agendando pra mim".
             reply = accessLinkInteractiveMessage(await inboxAccessUrl(), "schedule");
             processedAction = "portal_link";
           }
@@ -553,12 +558,22 @@ export class MessagingWorker {
         else if (facts.plan) reply = knowledgeAnswerInteractiveMessage(verifiedPlanMessage(facts.plan));
         else if (facts.childPolicy) reply = knowledgeAnswerInteractiveMessage(`${facts.childPolicy.name}: ${facts.childPolicy.description ?? "Consulte a equipe para detalhes."}`);
         else if (facts.procedure) {
-          if (facts.procedure.online_booking && isProcedureBookingRequest(messageText) && selectedPlanId === knowledge?.plans.find(isParticularPlan)?.id) {
+          const particularPlanId = knowledge?.plans.find(isParticularPlan)?.id;
+          if (facts.procedure.online_booking && isProcedureBookingRequest(messageText) && selectedPlanId === particularPlanId) {
+            // Direct booking path for an explicit Particular session: the
+            // patient opted into out-of-pocket payment and asked to book.
             reply = accessLinkInteractiveMessage(await inboxAccessUrl(), "schedule");
             processedAction = "portal_link";
           } else if (facts.procedure.online_booking && isProcedureBookingRequest(messageText) && !selectedPlanId) {
             reply = initialInsurancePromptMessage;
             processedAction = "plan_requested";
+          } else if (facts.procedure.online_booking && selectedPlanId) {
+            // A non-Particular plan is already resolved (from triage or a
+            // saved patient profile) and the procedure is online-bookable,
+            // so we can append a scheduling CTA to the description without
+            // forcing the patient to retype "marcar".
+            reply = knowledgeAnswerInteractiveMessage(verifiedProcedureMessage(facts.procedure), [{ type: "url", displayText: "Agendar avaliação", url: await inboxAccessUrl() }]);
+            processedAction = "portal_link";
           } else reply = knowledgeAnswerInteractiveMessage(verifiedProcedureMessage(facts.procedure));
         }
         else {
@@ -661,7 +676,7 @@ export class MessagingWorker {
     });
     if (error || data !== true) throw new Error("ACCESS_LINK_DELIVERY_FINALIZE_FAILED");
   }
-  private async loadKnowledge(): Promise<KnowledgeData> { const [plans, aliases, procedures, coverage, faqs] = await Promise.all([this.db.from("insurance_plans").select("id,name,instructions").eq("active", true), this.db.from("insurance_aliases").select("alias,insurance_plan_id").eq("active", true), this.db.from("procedures").select("id,name,description,online_booking").eq("active", true), this.db.from("procedure_coverage").select("procedure_id,insurance_plan_id,accepted,instructions"), this.db.from("faq_entries").select("category,question,answer").eq("active", true)]); if (plans.error || aliases.error || procedures.error || coverage.error || faqs.error) throw new Error("KNOWLEDGE_FAILED"); const knowledge = { plans: plans.data ?? [], aliases: aliases.data ?? [], procedures: procedures.data ?? [], coverage: coverage.data ?? [], faqs: faqs.data ?? [] }; assertInsurancePlanCatalog(knowledge); return knowledge; }
+  private async loadKnowledge(): Promise<KnowledgeData> { const [plans, aliases, procedures, coverage, faqs] = await Promise.all([this.db.from("insurance_plans").select("id,name,instructions").eq("active", true), this.db.from("insurance_aliases").select("alias,insurance_plan_id").eq("active", true), this.db.from("procedures").select("id,name,description,online_booking").eq("active", true), this.db.from("procedure_coverage").select("procedure_id,insurance_plan_id,accepted,instructions"), this.db.from("faq_entries").select("category,question,answer").eq("active", true)]); if (plans.error || aliases.error || procedures.error || coverage.error || faqs.error) throw new Error("KNOWLEDGE_FAILED"); const knowledge = { plans: plans.data ?? [], aliases: aliases.data ?? [], procedures: procedures.data ?? [], coverage: coverage.data ?? [], faqs: faqs.data ?? [] }; return knowledge; }
   async run() { log("info", "worker_started", { workerId: this.config.workerId, pollMs: this.config.pollMs, healthPort: this.config.healthPort, concurrency: this.config.concurrency, leaseSeconds: this.config.leaseSeconds, recipientPolicy: this.config.recipientPolicy, allowedRecipientCount: this.config.allowedRecipients?.length ?? 0, interactiveMessages: this.config.interactiveMessages, dailySummaryHour: this.config.dailySummaryHour ?? 8, calendarSyncIntervalMs: this.config.calendarSyncIntervalMs, calendarSyncEnabled: Boolean(this.calendarAuth), openaiEnabled: Boolean(this.config.openaiApiKey) }); while (!this.stopped) { try { await this.tick(); } catch (error) { this.lastPoll = 0; incrementCounter("luna_worker_failures_total", "Worker processing failures.", { queue: "poll" }); log("error", "worker_poll_failed", { pollNumber: this.pollNumber, error }); } await new Promise((resolve) => setTimeout(resolve, this.config.pollMs)); } log("info", "worker_stopped", { pollsCompleted: this.pollNumber }); }
   stop() { if (!this.stopped) log("info", "worker_shutdown_requested", { pollsCompleted: this.pollNumber }); this.stopped = true; }
   healthy() { return !this.stopped && Date.now() - this.lastPoll < Math.max(this.config.pollMs * 5, 10_000); }

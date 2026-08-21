@@ -248,12 +248,12 @@ export const unsupportedMediaInteractiveMessage: InteractiveMessage = {
 export const humanFallbackMessage = "Encaminhei sua mensagem para a equipe.";
 export const treatmentStatusHandoffMessage = "Encaminhei sua pergunta sobre o tratamento para a equipe.";
 
-export function knowledgeAnswerInteractiveMessage(answer: string): InteractiveMessage {
+export function knowledgeAnswerInteractiveMessage(answer: string, extraButtons: InteractiveButton[] = []): InteractiveMessage {
   return {
     title: "Informação da clínica",
     description: answer,
     footer: "Luna Agenda",
-    buttons: [{ type: "reply", id: menuActions.questions, displayText: "Outra dúvida" }],
+    buttons: [...extraButtons, { type: "reply", id: menuActions.questions, displayText: "Outra dúvida" }],
     fallbackText: answer,
   };
 }
