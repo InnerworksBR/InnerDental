@@ -1,0 +1,112 @@
+{
+  "title": "Luna Routing",
+  "uid": "luna-routing",
+  "schemaVersion": 39,
+  "tags": ["luna", "routing", "homologation"],
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Routing mix",
+      "targets": [
+        { "expr": "sum by (routing) (rate(luna_worker_messages_total{queue=\"inbox\"}[5m]))", "legendFormat": "{{routing}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "gauge",
+      "title": "Router fallback rate",
+      "targets": [
+        {
+          "expr": "sum(rate(luna_routing_calls_total{outcome=~\"timeout|5xx|fallback|unreachable|empty_decision|schema_invalid|ungrounded|budget_exceeded\"}[5m])) / clamp_min(sum(rate(luna_routing_calls_total[5m])), 1)",
+          "legendFormat": "fallback ratio"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Tool latency p95",
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(luna_routing_call_duration_seconds_bucket[5m])))", "legendFormat": "p95" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 2 },
+              { "color": "red", "value": 4 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "gauge",
+      "title": "Disagreement rate (shadow)",
+      "targets": [
+        {
+          "expr": "sum(rate(luna_routing_disagreement_total[5m])) / clamp_min(sum(rate(luna_routing_shadow_total{outcome=\"success\"}[5m])), 1)",
+          "legendFormat": "disagreement"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.1 },
+              { "color": "red", "value": 0.2 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "bargauge",
+      "title": "Daily token spend",
+      "targets": [
+        { "expr": "sum by (routing) (increase(luna_routing_tokens_total[1d]))", "legendFormat": "{{routing}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Dead-letter correlation",
+      "targets": [
+        { "expr": "luna_queue_inbox_dead_letters", "legendFormat": "inbox dead-letters" },
+        { "expr": "rate(luna_routing_calls_total{outcome=\"fallback\"}[5m])", "legendFormat": "fallback rate" }
+      ]
+    }
+  ]
+}

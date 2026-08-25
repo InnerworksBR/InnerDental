@@ -45,3 +45,40 @@ groups:
         annotations:
           impact: "Falhas do worker persistem por cinco minutos."
           runbook: "docs/runbooks/incident-response.md"
+  - name: luna-routing
+    rules:
+      - alert: LunaRoutingFallbackHigh
+        expr: sum(rate(luna_routing_calls_total{outcome=~"timeout|5xx|fallback|unreachable|empty_decision|schema_invalid|ungrounded|budget_exceeded"}[5m])) / clamp_min(sum(rate(luna_routing_calls_total[5m])), 1) > 0.10
+        for: 5m
+        labels: { severity: warning, owner: messaging }
+        annotations:
+          summary: "Luna router fallback rate > 10% for 5min"
+          runbook: "docs/runbooks/llm-routing-incident.md"
+      - alert: LunaRoutingLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(luna_routing_call_duration_seconds_bucket[5m]))) > 4
+        for: 10m
+        labels: { severity: warning, owner: messaging }
+        annotations:
+          summary: "Luna router p95 latency > 4s for 10min"
+          runbook: "docs/runbooks/llm-routing-incident.md"
+      - alert: LunaRoutingShadowDrift
+        expr: sum(rate(luna_routing_disagreement_total[5m])) / clamp_min(sum(rate(luna_routing_shadow_total{outcome="success"}[5m])), 1) > 0.20
+        for: 30m
+        labels: { severity: info, owner: messaging }
+        annotations:
+          summary: "Luna router shadow disagreement > 20% for 30min"
+          runbook: "docs/runbooks/llm-routing-incident.md"
+      - alert: LunaRoutingBudgetExhausted
+        expr: increase(luna_routing_tokens_total[1h]) > (200000 / 24) * 1.2
+        for: 30m
+        labels: { severity: info, owner: messaging }
+        annotations:
+          summary: "Luna router token spend > 120% of hourly budget"
+          runbook: "docs/runbooks/llm-routing-incident.md"
+      - alert: LunaRoutingDeadLetterSpike
+        expr: increase(luna_queue_inbox_dead_letters[10m]) > 5 and rate(luna_routing_calls_total{outcome="fallback"}[5m]) > 0.2
+        for: 10m
+        labels: { severity: critical, owner: messaging }
+        annotations:
+          summary: "Luna inbox dead-letters spiking AND router fallback rate high"
+          runbook: "docs/runbooks/llm-routing-incident.md"
