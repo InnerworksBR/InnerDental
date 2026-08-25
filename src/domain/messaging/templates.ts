@@ -1,4 +1,4 @@
-import type { MessageIntent } from "./intent";
+import type { MessageIntent } from "./intent.legacy";
 import { readableBrazilianPhone } from "./handoff.ts";
 
 export const menuActions = {

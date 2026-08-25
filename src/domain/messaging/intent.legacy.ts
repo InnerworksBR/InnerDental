@@ -1,3 +1,12 @@
+/**
+ * @deprecated This module is the legacy regex-based intent classifier.
+ * It is preserved only as the deterministic fallback for the LLM router
+ * (`src/domain/messaging/router-tools.ts`). New code should not import
+ * from this module. The fallback path will be removed in a future major
+ * release once the LLM router has been the sole routing source in
+ * production for >= 60 days.
+ */
+
 export type MessageIntent = "schedule" | "reschedule" | "cancel" | "confirm" | "appointment_status" | "treatment_status" | "insurance" | "procedure" | "faq" | "greeting" | "human" | "conversation";
 function normalized(value: string) { return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim(); }
 export function isExplicitHumanRequest(message: string): boolean {

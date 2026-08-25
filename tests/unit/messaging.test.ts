@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { classifyIntent, isAccessLinkRequest, isAppointmentStatusRequest, isClinicalQuestion, isExplicitHumanRequest, isGreetingMessage, isProcedureBookingRequest, isTreatmentStatusRequest } from "@/domain/messaging/intent";
+import { classifyIntent, isAccessLinkRequest, isAppointmentStatusRequest, isClinicalQuestion, isExplicitHumanRequest, isGreetingMessage, isProcedureBookingRequest, isTreatmentStatusRequest } from "@/domain/messaging/intent.legacy";
 import { whatsappMessageFingerprint } from "@/domain/messaging/fingerprint";
 import { appointmentConfirmationRequestInteractiveMessage, appointmentMessage, caixaInsuranceMessage, dailyConfirmationSummaryMessage, isAutomatedReplyEcho, knowledgeAnswerInteractiveMessage, menuActions, otpMessage, unsupportedInsuranceMessage } from "@/domain/messaging/templates";
 import { assertInsurancePlanCatalog, findRequestedProcedure, findStructuredAnswer, triageInsurancePlan } from "@/domain/knowledge/service";
