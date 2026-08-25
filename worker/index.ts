@@ -4,7 +4,8 @@ import { pathToFileURL } from "node:url";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { EvolutionClient } from "../src/integrations/evolution/client.ts";
 import { decryptOtp, encryptOtp } from "../src/lib/messaging/otp-cipher.ts";
-import { classifyIntent, isAccessLinkRequest, isExplicitHumanRequest, isPaymentQuestion, isProcedureBookingRequest, type MessageIntent } from "../src/domain/messaging/intent.ts";
+import { classifyIntent, isAccessLinkRequest, isExplicitHumanRequest, isPaymentQuestion, isProcedureBookingRequest, type MessageIntent } from "../src/domain/messaging/intent.legacy.ts";
+import { EMPTY_SLOTS } from "../src/domain/messaging/slots.ts";
 import { whatsappMessageFingerprint } from "../src/domain/messaging/fingerprint.ts";
 import { handoffNotificationMessage, handoffReason } from "../src/domain/messaging/handoff.ts";
 import {
@@ -39,9 +40,11 @@ import {
 } from "../src/domain/messaging/templates.ts";
 import { findRequestedProcedure, isExplicitInsurancePlanAnswer, isParticularPlan, triageInsurancePlan, type KnowledgeData } from "../src/domain/knowledge/service.ts";
 import { resolveVerifiedFacts } from "../src/domain/knowledge/verified-facts.ts";
-import { generateClinicReply } from "../src/integrations/openai/chat.ts";
+import { generateClinicReply, routeWithTools, validateRouterDecision, OpenAIRouterError } from "../src/integrations/openai/chat.ts";
+import type { RoutingContext, ToolName } from "../src/integrations/openai/router-types.ts";
+import { executeRouterTool } from "../src/domain/messaging/router-tools.ts";
 import { isCorrelationId, log } from "../src/lib/observability/logger.ts";
-import { incrementCounter, renderPrometheusMetrics, setGauge } from "../src/lib/observability/metrics.ts";
+import { incrementCounter, observeHistogram, renderPrometheusMetrics, setGauge } from "../src/lib/observability/metrics.ts";
 import { normalizeBrazilianPhone } from "../src/lib/phone/normalize.ts";
 import {
   GoogleServiceAccountAuth,
@@ -66,9 +69,139 @@ type PlanTriageDecision =
   | { kind: "reply"; message: string; action: "plan_requested" | "plan_rejected" | "plan_rejected_caixa" };
 type PreparedInboxAccessLink = { url: string; sourceInboxId: string; sentAt: string | null };
 type RecipientPolicy = "all" | "allowlist";
-type Config = { supabaseUrl: string; supabaseKey: string; evolutionBaseUrl: string; evolutionApiKey: string; evolutionInstance: string; otpSecret: string; portalBaseUrl: string; handoffNotificationPhone: string; dailySummaryHour?: number; googleCredentials?: GoogleServiceAccountCredentials; googleCalendarId?: string; calendarSyncIntervalMs?: number; openaiApiKey?: string; openaiModel: string; interactiveMessages?: boolean; recipientPolicy?: RecipientPolicy; pollMs: number; healthPort: number; workerId?: string; concurrency?: number; leaseSeconds?: number; allowedRecipients?: string[]; humanTakeoverPauseMinutes?: number; planTriageEnabled?: boolean };
+type LlmRoutingMode = "off" | "shadow" | "llm" | "regex_only";
+
+/**
+ * Canonical regex tool name produced by `runRegexCascade`. Mirrors the 18
+ * names the LLM router is allowed to emit (`ToolName`) plus three worker-only
+ * labels the regex path can produce but the router cannot:
+ *
+ * - `accept_plan` / `reject_plan` are decided by the plan-triage state machine
+ *   in `preparePlanTriage`; they never reach the cascade. They are still in
+ *   the union so the disagreement counter labels stay bounded and the shadow
+ *   contract stays explicit if PR 6 ever extends the cascade.
+ * - `fallback_kb` is the regex catch-all `knowledgeFallbackMessage`; the
+ *   router has no direct equivalent and would surface it as `handoff`.
+ */
+type RegexToolName =
+  | ToolName
+  | "accept_plan"
+  | "reject_plan"
+  | "fallback_kb";
+
+/**
+ * Return shape of `runRegexCascade`. The shape is byte-for-byte equivalent to
+ * the inline cascade it replaces; only the entry point moved. `regexTool` is
+ * new and feeds `luna_routing_disagreement_total` in PR 4.
+ *
+ * Exported in PR 8 so `src/domain/messaging/router-legacy-cascade.ts` can
+ * re-export the legacy fallback contract without reaching into worker
+ * internals at runtime (type-only re-export).
+ */
+export type RegexCascadeResult = {
+  reply: string | InteractiveMessage;
+  processedAction?: string;
+  handoff: boolean;
+  factResolution: "not_requested" | "resolved" | "ambiguous_plan" | "price_unavailable" | "not_found";
+  ground: "not_used" | "accepted" | "fallback" | "disabled";
+  usedLlm: boolean;
+  usedFallback: boolean;
+  regexTool: RegexToolName;
+};
+
+/**
+ * Input shape of `runRegexCascade`. Extracted to a named alias in PR 8 so
+ * `src/domain/messaging/router-legacy-cascade.ts` can re-export the legacy
+ * fallback contract. The shape is byte-for-byte identical to the previous
+ * inline parameter; the `runRegexCascade` method below consumes this alias
+ * directly so callers see no signature change.
+ *
+ * Exported in PR 8 for the same reason as `RegexCascadeResult` above.
+ */
+export type RegexCascadeInput = {
+  row: InboxRow;
+  intent: MessageIntent;
+  messageText: string;
+  knowledge: KnowledgeData | undefined;
+  verifiedFacts: ReturnType<typeof resolveVerifiedFacts> | undefined;
+  selectedPlanId: string | undefined;
+  preparedInboxLink: PreparedInboxAccessLink | undefined;
+  inboxAccessUrl: () => Promise<string>;
+};
+
+/**
+ * Reasons `tryRouter` short-circuits before calling OpenAI or rejects the
+ * router's verdict. Each reason maps 1:1 to a counter label on
+ * `luna_routing_calls_total{outcome}` so dashboards can decompose fallback
+ * rate without parsing log strings.
+ */
+type RouterFallbackReason =
+  | "api_key_missing"
+  | "budget_exceeded"
+  | "unreachable"
+  | "timeout"
+  | "empty_decision"
+  | "schema_invalid"
+  | "ungrounded"
+  | "flag_off"
+  | "tool_rpc_failed";
+
+/**
+ * Outcome of `tryRouter`. The worker either receives a successful LLM
+ * decision with a placeholder reply (PR 6 does NOT wire real templates to
+ * tool execution — that lands in a later PR) or a deterministic reason to
+ * fall back to `runRegexCascade`.
+ */
+type RouterResult =
+  | {
+      kind: "llm";
+      reply: string | InteractiveMessage;
+      processedAction: string;
+      handoff: boolean;
+      routing: "llm";
+      routingTool: string | null;
+      tokensIn: number;
+      tokensOut: number;
+      latencyMs: number;
+    }
+  | { kind: "regex_fallback"; reason: RouterFallbackReason; routing: "regex" };
+type Config = {
+  supabaseUrl: string; supabaseKey: string; evolutionBaseUrl: string; evolutionApiKey: string; evolutionInstance: string; otpSecret: string; portalBaseUrl: string; handoffNotificationPhone: string; dailySummaryHour?: number; googleCredentials?: GoogleServiceAccountCredentials; googleCalendarId?: string; calendarSyncIntervalMs?: number; openaiApiKey?: string; openaiModel: string; interactiveMessages?: boolean; recipientPolicy?: RecipientPolicy; pollMs: number; healthPort: number; workerId?: string; concurrency?: number; leaseSeconds?: number; allowedRecipients?: string[]; humanTakeoverPauseMinutes?: number; planTriageEnabled?: boolean;
+  llmRouting?: LlmRoutingMode;
+  openaiRoutingModel?: string;
+  openaiRoutingTimeoutMs?: number;
+  openaiRoutingMaxRetries?: number;
+  openaiRoutingDailyTokenBudget?: number;
+};
 
 const WHATSAPP_ACCESS_LINK_TTL_MS = 24 * 60 * 60_000;
+
+/**
+ * Static set of the 18 router tool names. Used by `recordDisagreement` to
+ * decide whether a `(regex_tool, llm_tool)` pair is comparable. Worker-only
+ * labels (`accept_plan`, `reject_plan`, `fallback_kb`) are excluded so the
+ * disagreement counter only fires on structurally comparable decisions.
+ */
+const ROUTER_TOOL_NAMES_SET: ReadonlySet<ToolName> = new Set<ToolName>([
+  "request_scheduling_link",
+  "answer_plan",
+  "answer_plan_list",
+  "answer_procedure",
+  "answer_procedure_list",
+  "answer_coverage",
+  "answer_child_policy",
+  "answer_faq",
+  "ask_plan",
+  "accept_plan",
+  "reject_plan",
+  "ask_procedure",
+  "confirm_attendance",
+  "lookup_upcoming_appointment",
+  "handoff",
+  "greet",
+  "send_questions_menu",
+  "send_unsupported_media_reply",
+]);
 
 function verifiedFactSource(resolution: ReturnType<typeof resolveVerifiedFacts> | undefined) {
   if (resolution?.kind !== "resolved") return "none";
@@ -80,8 +213,34 @@ function verifiedFactSource(resolution: ReturnType<typeof resolveVerifiedFacts> 
   return "none";
 }
 
+/**
+ * Map an LLM-routed tool name to the inbox `processed_action` label. PR 6
+ * keeps the mapping narrow (the regex cascade already covers the long tail);
+ * tools without a dedicated label fall through to `structured_answer` so
+ * the dashboards keep a single, well-known bucket for the LLM path.
+ */
+function toolProcessedAction(tool: ToolName): string {
+  if (tool === "request_scheduling_link") return "portal_link";
+  if (tool === "ask_plan") return "plan_requested";
+  if (tool === "ask_procedure") return "procedure_requested";
+  if (tool === "accept_plan") return "portal_link";
+  if (tool === "reject_plan") return "plan_rejected";
+  if (tool === "confirm_attendance") return "appointment_confirmed";
+  if (tool === "lookup_upcoming_appointment") return "appointment_lookup";
+  if (tool === "handoff") return "handoff";
+  return "structured_answer";
+}
+
 function required(name: string) { const value = process.env[name]?.trim(); if (!value) throw new Error(`Missing ${name}`); return value; }
 function booleanSetting(name: string, fallback = false) { const value = process.env[name]?.trim().toLowerCase(); if (!value) return fallback; if (value === "true") return true; if (value === "false") return false; throw new Error(`${name}_INVALID`); }
+function parseLlmRoutingMode(raw: string | undefined): LlmRoutingMode {
+  if (!raw) return "off";
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "true") return "llm";
+  if (normalized === "false") return "off";
+  if (["off", "shadow", "llm", "regex_only"].includes(normalized)) return normalized as LlmRoutingMode;
+  throw new Error("WORKER_LLM_ROUTING_ENABLED_INVALID");
+}
 export function loadWorkerConfig(): Config {
   const otpSecret = required("OTP_ENCRYPTION_SECRET");
   if (otpSecret.length < 32) throw new Error("OTP_ENCRYPTION_SECRET_INVALID");
@@ -102,10 +261,27 @@ export function loadWorkerConfig(): Config {
   let handoffNotificationPhone: string;
   try { handoffNotificationPhone = normalizeBrazilianPhone(required("HANDOFF_NOTIFICATION_PHONE")); }
   catch { throw new Error("HANDOFF_NOTIFICATION_PHONE_INVALID"); }
+  const llmRouting = parseLlmRoutingMode(process.env.WORKER_LLM_ROUTING_ENABLED);
+  const openaiRoutingModel = process.env.OPENAI_ROUTING_MODEL?.trim() || process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini";
+  const openaiRoutingTimeoutMs = Number(process.env.OPENAI_ROUTING_TIMEOUT_MS ?? 4000);
+  const openaiRoutingMaxRetries = Number(process.env.OPENAI_ROUTING_MAX_RETRIES ?? 1);
+  const openaiRoutingDailyTokenBudget = Number(process.env.OPENAI_ROUTING_DAILY_TOKEN_BUDGET ?? 200000);
   if (!Number.isFinite(pollMs) || pollMs < 250 || !Number.isInteger(healthPort) || healthPort < 1 || healthPort > 65535 || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 20 || !Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 900) throw new Error("WORKER_INTERVAL_OR_PORT_INVALID");
   if (!Number.isInteger(dailySummaryHour) || dailySummaryHour < 0 || dailySummaryHour > 23) throw new Error("WORKER_DAILY_SUMMARY_HOUR_INVALID");
   if (!Number.isInteger(calendarSyncIntervalMs) || calendarSyncIntervalMs < 15_000 || calendarSyncIntervalMs > 3_600_000) throw new Error("WORKER_CALENDAR_SYNC_INTERVAL_MS_INVALID");
-  return { supabaseUrl: required("NEXT_PUBLIC_SUPABASE_URL"), supabaseKey: required("SUPABASE_SECRET_KEY"), evolutionBaseUrl: required("EVOLUTION_BASE_URL"), evolutionApiKey: required("EVOLUTION_API_KEY"), evolutionInstance: required("EVOLUTION_INSTANCE"), otpSecret, portalBaseUrl: portal.toString().replace(/\/$/, ""), handoffNotificationPhone, dailySummaryHour, googleCredentials, googleCalendarId: process.env.GOOGLE_CALENDAR_ID?.trim() || undefined, calendarSyncIntervalMs, openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined, openaiModel: process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini", interactiveMessages: booleanSetting("EVOLUTION_INTERACTIVE_MESSAGES"), recipientPolicy, pollMs, healthPort, workerId: process.env.WORKER_ID?.trim() || `worker-${randomUUID()}`, concurrency, leaseSeconds, allowedRecipients: [...new Set(allowedRecipients)], humanTakeoverPauseMinutes: 120, planTriageEnabled: true };
+  if (!Number.isInteger(openaiRoutingTimeoutMs) || openaiRoutingTimeoutMs < 250 || openaiRoutingTimeoutMs > 12000) throw new Error("OPENAI_ROUTING_TIMEOUT_MS_INVALID");
+  if (!Number.isInteger(openaiRoutingMaxRetries) || openaiRoutingMaxRetries < 0 || openaiRoutingMaxRetries > 3) throw new Error("OPENAI_ROUTING_MAX_RETRIES_INVALID");
+  if (!Number.isInteger(openaiRoutingDailyTokenBudget) || openaiRoutingDailyTokenBudget <= 0) throw new Error("OPENAI_ROUTING_DAILY_TOKEN_BUDGET_INVALID");
+  return {
+    supabaseUrl: required("NEXT_PUBLIC_SUPABASE_URL"), supabaseKey: required("SUPABASE_SECRET_KEY"), evolutionBaseUrl: required("EVOLUTION_BASE_URL"), evolutionApiKey: required("EVOLUTION_API_KEY"), evolutionInstance: required("EVOLUTION_INSTANCE"), otpSecret, portalBaseUrl: portal.toString().replace(/\/$/, ""), handoffNotificationPhone, dailySummaryHour, googleCredentials, googleCalendarId: process.env.GOOGLE_CALENDAR_ID?.trim() || undefined, calendarSyncIntervalMs,
+    openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined, openaiModel: process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini",
+    interactiveMessages: booleanSetting("EVOLUTION_INTERACTIVE_MESSAGES"), recipientPolicy, pollMs, healthPort, workerId: process.env.WORKER_ID?.trim() || `worker-${randomUUID()}`, concurrency, leaseSeconds, allowedRecipients: [...new Set(allowedRecipients)], humanTakeoverPauseMinutes: 120, planTriageEnabled: true,
+    llmRouting,
+    openaiRoutingModel,
+    openaiRoutingTimeoutMs,
+    openaiRoutingMaxRetries,
+    openaiRoutingDailyTokenBudget,
+  };
 }
 const opaqueToken = () => randomBytes(32).toString("base64url");
 const tokenHash = (token: string) => createHash("sha256").update(token, "utf8").digest("hex");
@@ -114,6 +290,15 @@ const retryAt = (attempts: number) => new Date(Date.now() + Math.min(60_000, 100
 export class MessagingWorker {
   private stopped = false; private lastPoll = Date.now(); private lastQueueHealthAt = 0; private pollNumber = 0;
   private lastCalendarSyncAt = 0; private calendarSyncHealthy = true;
+  /**
+   * Per-day rolling counter for `OPENAI_ROUTING_DAILY_TOKEN_BUDGET`. Reset at
+   * midnight BRT (UTC-3) so the limit tracks clinic hours, not the UTC day.
+   * `tokenBudgetDay` stores the current BRT date as `YYYY-MM-DD` so the
+   * `tick()` entrypoint and `tryRouter` see a consistent boundary without
+   * having to re-derive it on every call.
+   */
+  private tokenBudgetDay = "";
+  private tokenBudgetUsed = 0;
   private readonly calendarAuth?: GoogleServiceAccountAuth;
   private readonly db: SupabaseClient; private readonly evolution: EvolutionClient; private readonly config: Config;
   constructor(db: SupabaseClient, evolution: EvolutionClient, config: Config) {
@@ -128,6 +313,11 @@ export class MessagingWorker {
       recipientPolicy: config.recipientPolicy ?? "allowlist",
       calendarSyncIntervalMs: config.calendarSyncIntervalMs ?? 60_000,
       planTriageEnabled: config.planTriageEnabled ?? false,
+      llmRouting: config.llmRouting ?? "off",
+      openaiRoutingModel: config.openaiRoutingModel ?? config.openaiModel ?? "gpt-4o-mini",
+      openaiRoutingTimeoutMs: config.openaiRoutingTimeoutMs ?? 4000,
+      openaiRoutingMaxRetries: config.openaiRoutingMaxRetries ?? 1,
+      openaiRoutingDailyTokenBudget: config.openaiRoutingDailyTokenBudget ?? 200000,
     };
     this.calendarAuth = config.googleCredentials ? new GoogleServiceAccountAuth(config.googleCredentials) : undefined;
   }
@@ -225,7 +415,7 @@ export class MessagingWorker {
         return;
       }
       await this.updateOrThrow("notification_outbox", row.id, { status: "sent", sent_at: new Date().toISOString(), last_error: null }, row.lease_token);
-      incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "outbox", result: "sent" });
+      incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "outbox", result: "sent", routing: "regex" });
       log("info", "outbox_message_sent", { correlationId: this.correlationId(row), eventType: row.event_type, attempts: row.attempts, durationMs: Date.now() - startedAt });
     } catch (error) {
       const message = error instanceof Error ? error.message : "delivery_failed";
@@ -443,6 +633,429 @@ export class MessagingWorker {
       return [];
     }
   }
+  /**
+   * Deterministic regex/intent cascade extracted from the body of
+   * `processInbox`. Behavior is byte-identical to the original inline cascade;
+   * the extraction is purely structural so PR 4 can observe the canonical
+   * regex tool name (for disagreement analysis) and PR 5/6 can swap in the
+   * LLM router without disturbing the regex fallback path.
+   *
+   * Plan triage is intentionally NOT part of this method — `processInbox`
+   * runs `preparePlanTriage` first, then either short-circuits with a
+   * triage reply or feeds the resolved intent + plan into this cascade.
+   *
+   * @returns A `RegexCascadeResult` describing the chosen reply, the action
+   *          label the worker should persist on the inbox row, and the
+   *          canonical regex tool name (`regexTool`) used for disagreement
+   *          comparison against the LLM shadow verdict.
+   */
+  private async runRegexCascade(input: RegexCascadeInput): Promise<RegexCascadeResult> {
+    const { row, intent, messageText, knowledge, verifiedFacts, selectedPlanId, inboxAccessUrl } = input;
+    let reply: string | InteractiveMessage;
+    let handoff = false;
+    let usedLlm = false;
+    let usedFallback = false;
+    let groundingResult: RegexCascadeResult["ground"] = "not_used";
+    let processedAction: string | undefined;
+    let regexTool: RegexToolName;
+    if (intent === "confirm") {
+      const { data, error } = await this.db.rpc("confirm_upcoming_appointment_by_phone", { p_phone: row.phone });
+      const result = data as { status?: "confirmed" | "already_confirmed" | "not_found" | "ambiguous"; start_at?: string } | null;
+      if (error || !result?.status || !["confirmed", "already_confirmed", "not_found", "ambiguous"].includes(result.status)) throw new Error("APPOINTMENT_CONFIRMATION_FAILED");
+      const accessUrl = ["not_found", "ambiguous"].includes(result.status) ? await inboxAccessUrl() : undefined;
+      reply = attendanceConfirmationReplyMessage(result.status, result.start_at, accessUrl);
+      processedAction = result.status === "confirmed" ? "appointment_confirmed" : result.status === "already_confirmed" ? "appointment_already_confirmed" : `confirmation_${result.status}`;
+      regexTool = "confirm_attendance";
+    }
+    else if (intent === "appointment_status") {
+      const { data, error } = await this.db.rpc("get_upcoming_appointment_by_phone", { p_phone: row.phone });
+      const result = data as { status?: "found" | "not_found"; start_at?: string; professional_name?: string } | null;
+      if (error || !result?.status || !["found", "not_found"].includes(result.status)) throw new Error("APPOINTMENT_LOOKUP_FAILED");
+      const accessUrl = await inboxAccessUrl();
+      reply = upcomingAppointmentInteractiveMessage(result.status, accessUrl, result.start_at, result.professional_name);
+      processedAction = result.status === "found" ? "appointment_lookup" : "appointment_not_found";
+      regexTool = "lookup_upcoming_appointment";
+    }
+    else if (intent === "treatment_status") {
+      reply = treatmentStatusHandoffMessage;
+      handoff = true;
+      regexTool = "handoff";
+    }
+    else if (verifiedFacts?.kind === "ambiguous_plan") {
+      reply = ambiguousInsuranceMessage;
+      processedAction = "structured_answer";
+      regexTool = "ask_plan";
+    }
+    else if (verifiedFacts?.kind === "price_unavailable") {
+      reply = priceConfirmationMessage;
+      handoff = true;
+      regexTool = "handoff";
+    }
+    else if (verifiedFacts?.kind === "resolved" && verifiedFacts.critical) {
+      const facts = verifiedFacts.facts;
+      if (facts.coverage && facts.plan && facts.procedure) {
+        reply = knowledgeAnswerInteractiveMessage(verifiedCoverageMessage({
+          planName: facts.plan.name,
+          procedureName: facts.procedure.name,
+          status: facts.coverage.status,
+          instructions: facts.coverage.instructions,
+        }));
+        if (facts.coverage.status !== "accepted") {
+          handoff = true;
+          regexTool = "answer_coverage";
+        }
+        else if (facts.procedure.online_booking) {
+          // A confirmed coverage + online-bookable procedure is enough to
+          // hand the secure portal link. The patient is not required to
+          // also type "marcar" — that pattern made the bot describe the
+          // procedure but never issue a link, which patients read as
+          // "não está agendando pra mim".
+          reply = accessLinkInteractiveMessage(await inboxAccessUrl(), "schedule");
+          processedAction = "portal_link";
+          regexTool = "request_scheduling_link";
+        } else {
+          regexTool = "answer_coverage";
+        }
+      }
+      else if (facts.planList) {
+        reply = knowledgeAnswerInteractiveMessage(verifiedPlanListMessage(facts.planList));
+        regexTool = "answer_plan_list";
+      }
+      else if (facts.procedureList) {
+        reply = knowledgeAnswerInteractiveMessage(verifiedProcedureListMessage(facts.procedureList));
+        regexTool = "answer_procedure_list";
+      }
+      else if (facts.plan) {
+        reply = knowledgeAnswerInteractiveMessage(verifiedPlanMessage(facts.plan));
+        regexTool = "answer_plan";
+      }
+      else if (facts.childPolicy) {
+        reply = knowledgeAnswerInteractiveMessage(`${facts.childPolicy.name}: ${facts.childPolicy.description ?? "Consulte a equipe para detalhes."}`);
+        regexTool = "answer_child_policy";
+      }
+      else if (facts.procedure) {
+        const particularPlanId = knowledge?.plans.find(isParticularPlan)?.id;
+        if (facts.procedure.online_booking && isProcedureBookingRequest(messageText) && selectedPlanId === particularPlanId) {
+          // Direct booking path for an explicit Particular session: the
+          // patient opted into out-of-pocket payment and asked to book.
+          reply = accessLinkInteractiveMessage(await inboxAccessUrl(), "schedule");
+          processedAction = "portal_link";
+          regexTool = "request_scheduling_link";
+        } else if (facts.procedure.online_booking && isProcedureBookingRequest(messageText) && !selectedPlanId) {
+          reply = initialInsurancePromptMessage;
+          processedAction = "plan_requested";
+          regexTool = "ask_plan";
+        } else if (facts.procedure.online_booking && selectedPlanId) {
+          // A non-Particular plan is already resolved (from triage or a
+          // saved patient profile) and the procedure is online-bookable,
+          // so we can append a scheduling CTA to the description without
+          // forcing the patient to retype "marcar".
+          reply = knowledgeAnswerInteractiveMessage(verifiedProcedureMessage(facts.procedure), [{ type: "url", displayText: "Agendar avaliação", url: await inboxAccessUrl() }]);
+          processedAction = "portal_link";
+          regexTool = "request_scheduling_link";
+        } else {
+          reply = knowledgeAnswerInteractiveMessage(verifiedProcedureMessage(facts.procedure));
+          regexTool = "answer_procedure";
+        }
+      }
+      else {
+        reply = knowledgeFallbackMessage;
+        handoff = true;
+        regexTool = "handoff";
+      }
+    }
+    else if (["schedule", "reschedule", "cancel"].includes(intent)) {
+      reply = accessLinkInteractiveMessage(await inboxAccessUrl(), intent);
+      regexTool = "request_scheduling_link";
+    }
+    else if (intent === "greeting") {
+      reply = greetingInteractiveMessage;
+      regexTool = "greet";
+    }
+    else if (messageText === menuActions.questions) {
+      reply = questionsInteractiveMessage;
+      regexTool = "send_questions_menu";
+    }
+    else if (messageText === menuActions.insurance) {
+      reply = insurancePromptMessage;
+      regexTool = "ask_plan";
+    }
+    else if (messageText === menuActions.procedures) {
+      reply = procedurePromptMessage;
+      regexTool = "ask_procedure";
+    }
+    else if (messageText === menuActions.unsupportedMedia) {
+      reply = unsupportedMediaInteractiveMessage;
+      regexTool = "send_unsupported_media_reply";
+    }
+    else if (isExplicitHumanRequest(messageText)) {
+      reply = humanFallbackMessage;
+      handoff = true;
+      regexTool = "handoff";
+    }
+    else if (verifiedFacts?.kind === "resolved" && verifiedFacts.facts.faq) {
+      const facts = { faq: verifiedFacts.facts.faq };
+      if (this.config.openaiApiKey) {
+        try {
+          const conversationContext = await this.loadConversationContext(row.phone, row.id);
+          const generated = await generateClinicReply({ apiKey: this.config.openaiApiKey, model: this.config.openaiModel, message: messageText, facts, conversationContext });
+          usedLlm = true;
+          groundingResult = "accepted";
+          handoff = generated.handoffRequired;
+          reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(generated.text);
+        } catch (error) {
+          log("warn", "openai_reply_failed", { correlationId: row.id, error });
+          usedFallback = true;
+          groundingResult = "fallback";
+          reply = knowledgeAnswerInteractiveMessage(facts.faq.answer);
+        }
+      } else {
+        usedFallback = true;
+        groundingResult = "disabled";
+        reply = knowledgeAnswerInteractiveMessage(facts.faq.answer);
+      }
+      regexTool = "answer_faq";
+    }
+    else {
+      reply = knowledgeFallbackMessage;
+      handoff = true;
+      regexTool = "fallback_kb";
+    }
+    return {
+      reply,
+      processedAction,
+      handoff,
+      factResolution: verifiedFacts?.kind ?? "not_requested",
+      ground: groundingResult,
+      usedLlm,
+      usedFallback,
+      regexTool,
+    };
+  }
+  /**
+   * Shadow-mode LLM observer (PR 4). The router decides what it WOULD have
+   * invoked if it had been in primary mode, but the call only records
+   * metrics — it does NOT execute tools and does NOT touch the inbox row.
+   *
+   * Contract:
+   * - Skips silently when `OPENAI_API_KEY` is unset (no metric increments).
+   * - Never throws out: every error path is logged and metered.
+   * - Increments `luna_routing_shadow_total` for every observed outcome.
+   * - Increments `luna_routing_disagreement_total` only when both the regex
+   *   tool and the LLM tool are in the 18-name router enum and they differ.
+   *
+   * @param row    Inbox row being processed (for correlation/log only).
+   * @param ctx    Routing context derived from the regex cascade.
+   */
+  private async shadowRoute(
+    row: InboxRow,
+    ctx: {
+      intent: MessageIntent;
+      knowledge: KnowledgeData | undefined;
+      messageText: string;
+      verifiedFacts: ReturnType<typeof resolveVerifiedFacts> | undefined;
+      regexTool: RegexToolName;
+    },
+  ): Promise<void> {
+    if (!this.config.openaiApiKey) {
+      log("info", "routing_shadow_skipped", { reason: "api_key_missing", correlationId: row.id });
+      return;
+    }
+    const recentTurns = await this.loadConversationContext(row.phone, row.id);
+    const context: RoutingContext = {
+      phone: row.phone,
+      slots: { ...EMPTY_SLOTS },
+      recent_turns: recentTurns,
+      knowledge: ctx.knowledge ?? { plans: [], aliases: [], procedures: [], coverage: [], faqs: [] },
+    };
+    try {
+      const result = await routeWithTools({
+        apiKey: this.config.openaiApiKey,
+        model: this.config.openaiRoutingModel ?? this.config.openaiModel,
+        context,
+        toolSchemas: [],
+        timeoutMs: this.config.openaiRoutingTimeoutMs ?? 4000,
+        maxRetries: this.config.openaiRoutingMaxRetries ?? 1,
+      });
+      const validation = validateRouterDecision(result.decision, context);
+      if (!validation.valid) {
+        incrementCounter("luna_routing_shadow_total", "Shadow-mode router observations.", { tool: "none", outcome: "schema_invalid" });
+        log("warn", "routing_shadow_failed", { correlationId: row.id, reason: "schema_invalid" });
+        return;
+      }
+      const firstCall = result.decision.calls[0];
+      const tool = firstCall?.name ?? "none";
+      incrementCounter("luna_routing_shadow_total", "Shadow-mode router observations.", { tool, outcome: "success" });
+      this.recordDisagreement(ctx.regexTool, tool);
+    } catch (error) {
+      if (error instanceof OpenAIRouterError) {
+        const reason = error.code.toLowerCase().replace("openai_", "");
+        incrementCounter("luna_routing_shadow_total", "Shadow-mode router observations.", { tool: "none", outcome: reason });
+        log("warn", "routing_shadow_failed", { correlationId: row.id, reason });
+        return;
+      }
+      incrementCounter("luna_routing_shadow_total", "Shadow-mode router observations.", { tool: "none", outcome: "exception" });
+      log("error", "routing_shadow_failed", { correlationId: row.id, reason: "exception", error });
+    }
+  }
+  /**
+   * Bump `luna_routing_disagreement_total` only when both tools are in the
+   * router enum (the 18 names). Worker-only labels like `fallback_kb`,
+   * `accept_plan`, and `reject_plan` are deliberately excluded: comparing
+   * them against LLM tool calls would inflate disagreement counts with
+   * structurally incomparable rows.
+   */
+  private recordDisagreement(regexTool: RegexToolName, llmTool: ToolName | "none"): void {
+    if (llmTool === "none") return;
+    if (!ROUTER_TOOL_NAMES_SET.has(regexTool as ToolName)) return;
+    if (regexTool === llmTool) return;
+    incrementCounter(
+      "luna_routing_disagreement_total",
+      "Shadow-mode disagreement between regex and LLM routing.",
+      { regex_tool: regexTool, llm_tool: llmTool },
+    );
+  }
+  /**
+   * Current BR (UTC-3) date as `YYYY-MM-DD`. The token budget resets at
+   * midnight BRT so the limit tracks clinic operating hours rather than UTC.
+   */
+  private currentBrDay(now: Date = new Date()): string {
+    const brt = new Date(now.getTime() - 3 * 60 * 60_000);
+    const year = brt.getUTCFullYear();
+    const month = String(brt.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(brt.getUTCDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  /**
+   * LLM-primary path introduced by PR 6. Returns either:
+   * - a successful router verdict (placeholder reply — the real template is
+   *   wired in a follow-up PR), or
+   * - a deterministic fallback reason so `processInbox` can run the regex
+   *   cascade unchanged.
+   *
+   * Failure precedence (first match wins):
+   * 1. `flag_off` — `config.llmRouting !== "llm"`.
+   * 2. `api_key_missing` — `OPENAI_API_KEY` empty.
+   * 3. `budget_exceeded` — today's prompt+completion tokens exceed
+   *    `OPENAI_ROUTING_DAILY_TOKEN_BUDGET` (in-memory counter, reset at
+   *    midnight BRT).
+   *
+   * Runtime failures are caught and tagged with the matching `OpenAIRouterError`
+   * reason so dashboards can decompose fallback rate. A schema-invalid or
+   * out-of-allowlist tool call is treated as `ungrounded` — the prompt-
+   * injection defense is structural, so we fall back instead of executing.
+   *
+   * PR 6 intentionally does NOT execute the tool: the stubs from PR 3 return
+   * placeholders. Wiring real RPC + templates is a later PR; this one proves
+   * the round-trip and instruments it.
+   */
+  private async tryRouter(input: {
+    row: InboxRow;
+    intent: MessageIntent;
+    knowledge: KnowledgeData | undefined;
+    verifiedFacts: ReturnType<typeof resolveVerifiedFacts> | undefined;
+    messageText: string;
+  }): Promise<RouterResult> {
+    const fallback = (reason: RouterFallbackReason): RouterResult => ({ kind: "regex_fallback", reason, routing: "regex" });
+    if (this.config.llmRouting !== "llm") return fallback("flag_off");
+    if (!this.config.openaiApiKey) {
+      incrementCounter("luna_routing_calls_total", "LLM router call outcomes.", { routing: "llm", outcome: "api_key_missing" });
+      log("info", "routing_skipped", { correlationId: input.row.id, reason: "api_key_missing" });
+      return fallback("api_key_missing");
+    }
+    const today = this.currentBrDay();
+    if (this.tokenBudgetDay !== today) {
+      this.tokenBudgetDay = today;
+      this.tokenBudgetUsed = 0;
+    }
+    const budget = this.config.openaiRoutingDailyTokenBudget ?? 200000;
+    if (this.tokenBudgetUsed >= budget) {
+      log("warn", "routing_budget_exceeded", { correlationId: input.row.id, used: this.tokenBudgetUsed, budget });
+      return fallback("budget_exceeded");
+    }
+    const recentTurns = await this.loadConversationContext(input.row.phone, input.row.id);
+    const context: RoutingContext = {
+      phone: input.row.phone,
+      slots: { ...EMPTY_SLOTS },
+      recent_turns: recentTurns,
+      knowledge: input.knowledge ?? { plans: [], aliases: [], procedures: [], coverage: [], faqs: [] },
+    };
+    let result: Awaited<ReturnType<typeof routeWithTools>>;
+    try {
+      result = await routeWithTools({
+        apiKey: this.config.openaiApiKey,
+        model: this.config.openaiRoutingModel ?? this.config.openaiModel,
+        context,
+        toolSchemas: [],
+        timeoutMs: this.config.openaiRoutingTimeoutMs ?? 4000,
+        maxRetries: this.config.openaiRoutingMaxRetries ?? 1,
+      });
+    } catch (error) {
+      if (error instanceof OpenAIRouterError) {
+        const reason = error.code.toLowerCase().replace("openai_", "") as RouterFallbackReason;
+        const safeReason: RouterFallbackReason = [
+          "unreachable", "timeout", "empty_decision", "schema_invalid",
+        ].includes(reason)
+          ? (reason as RouterFallbackReason)
+          : "unreachable";
+        incrementCounter("luna_routing_calls_total", "LLM router call outcomes.", { routing: "llm", outcome: safeReason });
+        log("warn", "routing_skipped", { correlationId: input.row.id, reason: safeReason });
+        return fallback(safeReason);
+      }
+      incrementCounter("luna_routing_calls_total", "LLM router call outcomes.", { routing: "llm", outcome: "unreachable" });
+      log("error", "routing_skipped", { correlationId: input.row.id, reason: "exception", error });
+      return fallback("unreachable");
+    }
+    // Defensive runtime allowlist check. The OpenAI Zod schema already
+    // rejects unknown tool names, but a future schema relaxation must not
+    // silently let an ungrounded call reach the executor.
+    const validation = validateRouterDecision(result.decision, context);
+    if (!validation.valid) {
+      const reason = validation.reason === "UNKNOWN_TOOL" ? "ungrounded" : validation.reason.toLowerCase();
+      incrementCounter("luna_routing_calls_total", "LLM router call outcomes.", { routing: "llm", outcome: reason === "unknown_tool" ? "ungrounded" : "schema_invalid" });
+      log("warn", "routing_ungrounded", { correlationId: input.row.id, reason });
+      return fallback("ungrounded");
+    }
+    const firstCall = result.decision.calls[0];
+    if (!firstCall) {
+      incrementCounter("luna_routing_calls_total", "LLM router call outcomes.", { routing: "llm", outcome: "empty_decision" });
+      log("warn", "routing_skipped", { correlationId: input.row.id, reason: "empty_decision" });
+      return fallback("empty_decision");
+    }
+    let executorResult: { reply: string | InteractiveMessage; handoff?: boolean } = { reply: `__stub__:${firstCall.name}` };
+    try {
+      executorResult = await executeRouterTool(firstCall.name, firstCall.arguments ?? {}, {
+        phone: input.row.phone,
+        inboxId: input.row.id,
+        supabase: this.db,
+        evolution: this.evolution,
+        knowledge: context.knowledge,
+        slots: context.slots,
+      });
+    } catch (error) {
+      log("error", "routing_tool_failed", { correlationId: input.row.id, tool: firstCall.name, error });
+      incrementCounter("luna_routing_tool_total", "LLM router tool invocations.", { tool: firstCall.name, outcome: "rpc_failed" });
+      incrementCounter("luna_routing_calls_total", "LLM router call outcomes.", { routing: "llm", outcome: "tool_rpc_failed" });
+      return fallback("tool_rpc_failed");
+    }
+    this.tokenBudgetUsed += result.tokensIn + result.tokensOut;
+    setGauge("luna_openai_ready", "Whether the LLM router is reachable for the current inbox row.", {}, 1);
+    incrementCounter("luna_routing_calls_total", "LLM router call outcomes.", { routing: "llm", outcome: "success" });
+    incrementCounter("luna_routing_tool_total", "LLM router tool invocations.", { tool: firstCall.name, outcome: "success" });
+    incrementCounter("luna_routing_tokens_total", "LLM router token usage.", { routing: "llm" }, result.tokensIn + result.tokensOut);
+    observeHistogram("luna_routing_call_duration_seconds", "LLM router call latency in seconds.", { routing: "llm" }, result.latencyMs / 1000, [0.25, 0.5, 1, 2, 4, 6]);
+    return {
+      kind: "llm",
+      reply: executorResult.reply,
+      processedAction: toolProcessedAction(firstCall.name),
+      handoff: executorResult.handoff ?? false,
+      routing: "llm",
+      routingTool: firstCall.name,
+      tokensIn: result.tokensIn,
+      tokensOut: result.tokensOut,
+      latencyMs: result.latencyMs,
+    };
+  }
   async processInbox(row: InboxRow) {
     const startedAt = Date.now();
     let messageText = row.message_text;
@@ -473,7 +1086,7 @@ export class MessagingWorker {
         if (await this.ignoreIfConversationPaused(row, intent)) return;
         await this.sendReply(row.phone, triage.message);
         await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: null, classified_intent: intent, processed_action: triage.action }, row.lease_token);
-        incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "inbox", result: triage.action });
+        incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "inbox", result: triage.action, routing: "regex" });
         log("info", "inbox_plan_triage_processed", { correlationId: row.id, action: triage.action, attempts: row.attempts, durationMs: Date.now() - startedAt });
         return;
       }
@@ -490,129 +1103,81 @@ export class MessagingWorker {
         // the worker can recreate a portal response.
         await this.acceptPlanTriage(row.phone, acceptedPlan!.id, acceptedPlan!.promptedByInboxId, row.id);
       }
-      let reply: string | InteractiveMessage;
-      let handoff = false;
-      let usedLlm = false;
-      let usedFallback = false;
-      let groundingResult = "not_used";
-      let processedAction: string | undefined;
-      let knowledge: KnowledgeData | undefined;
-      const needsKnowledge = ["insurance", "procedure", "faq", "conversation"].includes(intent);
-      if (needsKnowledge) knowledge = await this.loadKnowledge();
-      const selectedPlanId = intent === "procedure"
-        ? acceptedPlan?.id ?? (this.config.planTriageEnabled ? await this.patientActivePlanId(row.phone) : knowledge?.plans.find(isParticularPlan)?.id)
+      const knowledge: KnowledgeData | undefined = ["insurance", "procedure", "faq", "conversation"].includes(intent)
+        ? await this.loadKnowledge()
+        : undefined;
+      const selectedPlanId: string | undefined = intent === "procedure"
+        ? acceptedPlan?.id ?? (this.config.planTriageEnabled ? await this.patientActivePlanId(row.phone) : knowledge?.plans.find(isParticularPlan)?.id) ?? undefined
         : undefined;
       const verifiedFacts = knowledge
         ? resolveVerifiedFacts(messageText, knowledge, { insurancePlanId: selectedPlanId ?? undefined })
         : undefined;
-      if (intent === "confirm") {
-        const { data, error } = await this.db.rpc("confirm_upcoming_appointment_by_phone", { p_phone: row.phone });
-        const result = data as { status?: "confirmed" | "already_confirmed" | "not_found" | "ambiguous"; start_at?: string } | null;
-        if (error || !result?.status || !["confirmed", "already_confirmed", "not_found", "ambiguous"].includes(result.status)) throw new Error("APPOINTMENT_CONFIRMATION_FAILED");
-        const accessUrl = ["not_found", "ambiguous"].includes(result.status) ? await inboxAccessUrl() : undefined;
-        reply = attendanceConfirmationReplyMessage(result.status, result.start_at, accessUrl);
-        processedAction = result.status === "confirmed" ? "appointment_confirmed" : result.status === "already_confirmed" ? "appointment_already_confirmed" : `confirmation_${result.status}`;
-      }
-      else if (intent === "appointment_status") {
-        const { data, error } = await this.db.rpc("get_upcoming_appointment_by_phone", { p_phone: row.phone });
-        const result = data as { status?: "found" | "not_found"; start_at?: string; professional_name?: string } | null;
-        if (error || !result?.status || !["found", "not_found"].includes(result.status)) throw new Error("APPOINTMENT_LOOKUP_FAILED");
-        const accessUrl = await inboxAccessUrl();
-        reply = upcomingAppointmentInteractiveMessage(result.status, accessUrl, result.start_at, result.professional_name);
-        processedAction = result.status === "found" ? "appointment_lookup" : "appointment_not_found";
-      }
-      else if (intent === "treatment_status") {
-        reply = treatmentStatusHandoffMessage;
-        handoff = true;
-      }
-      else if (verifiedFacts?.kind === "ambiguous_plan") {
-        reply = ambiguousInsuranceMessage;
-        processedAction = "structured_answer";
-      }
-      else if (verifiedFacts?.kind === "price_unavailable") {
-        reply = priceConfirmationMessage;
-        handoff = true;
-      }
-      else if (verifiedFacts?.kind === "resolved" && verifiedFacts.critical) {
-        const facts = verifiedFacts.facts;
-        if (facts.coverage && facts.plan && facts.procedure) {
-          reply = knowledgeAnswerInteractiveMessage(verifiedCoverageMessage({
-            planName: facts.plan.name,
-            procedureName: facts.procedure.name,
-            status: facts.coverage.status,
-            instructions: facts.coverage.instructions,
-          }));
-          if (facts.coverage.status !== "accepted") handoff = true;
-          else if (facts.procedure.online_booking) {
-            // A confirmed coverage + online-bookable procedure is enough to
-            // hand the secure portal link. The patient is not required to
-            // also type "marcar" — that pattern made the bot describe the
-            // procedure but never issue a link, which patients read as
-            // "não está agendando pra mim".
-            reply = accessLinkInteractiveMessage(await inboxAccessUrl(), "schedule");
-            processedAction = "portal_link";
-          }
-        }
-        else if (facts.planList) reply = knowledgeAnswerInteractiveMessage(verifiedPlanListMessage(facts.planList));
-        else if (facts.procedureList) reply = knowledgeAnswerInteractiveMessage(verifiedProcedureListMessage(facts.procedureList));
-        else if (facts.plan) reply = knowledgeAnswerInteractiveMessage(verifiedPlanMessage(facts.plan));
-        else if (facts.childPolicy) reply = knowledgeAnswerInteractiveMessage(`${facts.childPolicy.name}: ${facts.childPolicy.description ?? "Consulte a equipe para detalhes."}`);
-        else if (facts.procedure) {
-          const particularPlanId = knowledge?.plans.find(isParticularPlan)?.id;
-          if (facts.procedure.online_booking && isProcedureBookingRequest(messageText) && selectedPlanId === particularPlanId) {
-            // Direct booking path for an explicit Particular session: the
-            // patient opted into out-of-pocket payment and asked to book.
-            reply = accessLinkInteractiveMessage(await inboxAccessUrl(), "schedule");
-            processedAction = "portal_link";
-          } else if (facts.procedure.online_booking && isProcedureBookingRequest(messageText) && !selectedPlanId) {
-            reply = initialInsurancePromptMessage;
-            processedAction = "plan_requested";
-          } else if (facts.procedure.online_booking && selectedPlanId) {
-            // A non-Particular plan is already resolved (from triage or a
-            // saved patient profile) and the procedure is online-bookable,
-            // so we can append a scheduling CTA to the description without
-            // forcing the patient to retype "marcar".
-            reply = knowledgeAnswerInteractiveMessage(verifiedProcedureMessage(facts.procedure), [{ type: "url", displayText: "Agendar avaliação", url: await inboxAccessUrl() }]);
-            processedAction = "portal_link";
-          } else reply = knowledgeAnswerInteractiveMessage(verifiedProcedureMessage(facts.procedure));
-        }
-        else {
-          reply = knowledgeFallbackMessage;
-          handoff = true;
-        }
-      }
-      else if (["schedule", "reschedule", "cancel"].includes(intent)) reply = accessLinkInteractiveMessage(await inboxAccessUrl(), intent);
-      else if (intent === "greeting") reply = greetingInteractiveMessage;
-      else if (messageText === menuActions.questions) reply = questionsInteractiveMessage;
-      else if (messageText === menuActions.insurance) reply = insurancePromptMessage;
-      else if (messageText === menuActions.procedures) reply = procedurePromptMessage;
-      else if (messageText === menuActions.unsupportedMedia) reply = unsupportedMediaInteractiveMessage;
-      else if (isExplicitHumanRequest(messageText)) { reply = humanFallbackMessage; handoff = true; }
-      else if (verifiedFacts?.kind === "resolved" && verifiedFacts.facts.faq) {
-        const facts = { faq: verifiedFacts.facts.faq };
-        if (this.config.openaiApiKey) {
-          try {
-            const conversationContext = await this.loadConversationContext(row.phone, row.id);
-            const generated = await generateClinicReply({ apiKey: this.config.openaiApiKey, model: this.config.openaiModel, message: messageText, facts, conversationContext });
-            usedLlm = true;
-            groundingResult = "accepted";
-            handoff = generated.handoffRequired;
-            reply = handoff ? humanFallbackMessage : knowledgeAnswerInteractiveMessage(generated.text);
-          } catch (error) {
-            log("warn", "openai_reply_failed", { correlationId: row.id, error });
-            usedFallback = true;
-            groundingResult = "fallback";
-            reply = knowledgeAnswerInteractiveMessage(facts.faq.answer);
-          }
+      // PR 6: LLM-primary path. When the flag is `"llm"`, `tryRouter` decides
+      // the reply. On any fallback reason, the regex cascade runs unchanged
+      // so the inbox row finalizes deterministically. PR 6 uses the stubbed
+      // router reply; slot writes and real template execution arrive in PR 7+.
+      let reply: string | InteractiveMessage;
+      let handoff: boolean;
+      let processedAction: string | undefined;
+      let usedLlm: boolean;
+      let usedFallback: boolean;
+      let groundingResult: RegexCascadeResult["ground"];
+      let routing: "llm" | "regex" = "regex";
+      let routingTool: string | null = null;
+      let regexTool: RegexToolName = "fallback_kb";
+      if (this.config.llmRouting === "llm") {
+        const routerResult = await this.tryRouter({ row, intent, knowledge, verifiedFacts, messageText });
+        if (routerResult.kind === "llm") {
+          reply = routerResult.reply;
+          handoff = routerResult.handoff;
+          processedAction = routerResult.processedAction;
+          usedLlm = true;
+          usedFallback = false;
+          groundingResult = "not_used";
+          routing = "llm";
+          routingTool = routerResult.routingTool;
         } else {
-          usedFallback = true;
-          groundingResult = "disabled";
-          reply = knowledgeAnswerInteractiveMessage(facts.faq.answer);
+          const regexResult = await this.runRegexCascade({
+            row, intent, messageText, knowledge, verifiedFacts, selectedPlanId,
+            preparedInboxLink, inboxAccessUrl,
+          });
+          reply = regexResult.reply;
+          handoff = regexResult.handoff;
+          processedAction = regexResult.processedAction;
+          usedLlm = regexResult.usedLlm;
+          usedFallback = regexResult.usedFallback;
+          groundingResult = regexResult.ground;
+          regexTool = regexResult.regexTool;
+          routing = "regex";
+          routingTool = null;
         }
+      } else {
+        const regexResult = await this.runRegexCascade({
+          row, intent, messageText, knowledge, verifiedFacts, selectedPlanId,
+          preparedInboxLink, inboxAccessUrl,
+        });
+        reply = regexResult.reply;
+        handoff = regexResult.handoff;
+        processedAction = regexResult.processedAction;
+        usedLlm = regexResult.usedLlm;
+        usedFallback = regexResult.usedFallback;
+        groundingResult = regexResult.ground;
+        regexTool = regexResult.regexTool;
+        routing = "regex";
+        routingTool = null;
       }
-      else {
-        reply = knowledgeFallbackMessage;
-        handoff = true;
+      // PR 4/5/6: shadow observer. PR 6 makes the gate explicit — when
+      // `llmRouting === "llm"` the LLM is already the primary path, so the
+      // shadow is moot. The shadow metrics still exist for staging rollouts
+      // running with `llmRouting === "shadow"`.
+      if (this.config.llmRouting === "shadow" && this.config.openaiApiKey) {
+        try {
+          await this.shadowRoute(row, { intent, knowledge, messageText, verifiedFacts, regexTool });
+        } catch (error) {
+          // Defensive: shadowRoute already swallows; this catches any future
+          // regression where someone forgets the try/catch inside the helper.
+          log("error", "routing_shadow_unexpected_error", { correlationId: row.id, error });
+        }
       }
       if (await this.ignoreIfConversationPaused(row, intent)) return;
       if (handoff) {
@@ -626,8 +1191,8 @@ export class MessagingWorker {
       }
       const action = processedAction ?? (handoff ? "handoff" : ["schedule", "reschedule", "cancel"].includes(intent) ? "portal_link" : usedLlm ? "llm_answer" : usedFallback ? "fallback_answer" : "structured_answer");
       await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: null, classified_intent: intent, processed_action: action }, row.lease_token);
-      incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "inbox", result: handoff ? "handoff" : "answered" });
-      log("info", "inbox_message_processed", { correlationId: row.id, intent, action, factResolution: verifiedFacts?.kind ?? "not_requested", factSource: verifiedFactSource(verifiedFacts), groundingResult, attempts: row.attempts, durationMs: Date.now() - startedAt });
+      incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "inbox", result: handoff ? "handoff" : "answered", routing });
+      log("info", "inbox_message_processed", { correlationId: row.id, intent, action, routing, routingTool, factResolution: verifiedFacts?.kind ?? "not_requested", factSource: verifiedFactSource(verifiedFacts), groundingResult, attempts: row.attempts, durationMs: Date.now() - startedAt });
     } catch (error) {
       incrementCounter("luna_worker_failures_total", "Worker processing failures.", { queue: "inbox" });
       log("error", "inbox_processing_failed", { correlationId: row.id, attempts: row.attempts, error });
