@@ -79,7 +79,7 @@
 }
 
 /* ── SVG Icon sprite (hidden) ───────────────────────────── */
-.svg-icons { position: absolute; width: 0; height: 0; overflow: hidden; }
+.svg-icons { position: fixed; left: -9999px; top: -9999px; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: linear-gradient(180deg, #ede9e0, #e4dfd3); font-family: "Instrument Sans", system-ui, sans-serif; }
 button, input, select { font: inherit; }
@@ -105,14 +105,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .portal-header p { display: none; }
 footer { margin-top: 34px; color: #66716d; font-size: 12px; text-align: center; }
 
-.hero { position: relative; display: flex; min-height: calc(100vh - 190px); flex-direction: column; justify-content: center; overflow: hidden; }
-.hero::before { position: absolute; top: -150px; right: -150px; width: 300px; height: 300px; border-radius: 50%; background: radial-gradient(circle at 40% 40%, #dbede5, transparent 70%); content: ""; }
-.hero > * { position: relative; }
+.hero { position: relative; display: flex; min-height: calc(100vh - 190px); flex-direction: column; justify-content: center; overflow: hidden; padding: 20px 0; }
+.hero::before { position: absolute; top: -180px; right: -160px; width: 360px; height: 360px; border-radius: 50%; background: radial-gradient(circle at 40% 40%, #dceded 0%, #cde8dd 35%, transparent 65%); content: ""; pointer-events: none; z-index: 0; }
+.hero::after { position: absolute; bottom: -200px; left: -160px; width: 200px; height: 200px; border-radius: 50%; background: radial-gradient(circle at 60% 60%, #f0e8d4 0%, #f5efe0 40%, transparent 70%); content: ""; pointer-events: none; opacity: .5; z-index: 0; }
+.hero > * { position: relative; z-index: 1; }
 .hero h1, .card h1, .dashboard h1, .admin-shell h1 { margin: 8px 0 12px; color: #1b2422; font-family: "Bricolage Grotesque", serif; font-size: clamp(30px, 10vw, 40px); font-weight: 700; letter-spacing: -.02em; line-height: 1.06; }
 .hero h1 { max-width: 9ch; }
 .hero p { max-width: 30ch; margin: 0; color: #66716d; font-size: 15.5px; line-height: 1.6; }
 .hero .button { margin-top: 42px; }
-.hero-benefits { display: grid; gap: 11px; margin-top: 26px; color: #3d4744; font-size: 14.5px; }.hero-benefits span { display: flex; align-items: center; gap: 10px; }.hero-benefits span::before { width: 8px; height: 8px; border-radius: 50%; background: #16655b; content: ""; }.internal-link { margin-top: 10px; color: #66716d; font-size: 14px; font-weight: 700; text-align: center; text-decoration: none; }.internal-link:hover { color: #16655b; }
+.hero-benefits { display: grid; gap: 11px; margin-top: 26px; color: #3d4744; font-size: 14.5px; }.internal-link { margin-top: 10px; color: #66716d; font-size: 14px; font-weight: 700; text-align: center; text-decoration: none; }.internal-link:hover { color: #16655b; }
 .eyebrow { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
 .button { display: inline-flex; min-height: 54px; align-items: center; justify-content: center; border: 0; border-radius: 16px; padding: 0 20px; background: #16655b; color: white; cursor: pointer; font-weight: 700; text-decoration: none; transition: background .15s ease, transform .15s ease; }
 .button:hover { background: #0f4e46; }.button:active { transform: scale(.98); }.button:disabled { cursor: wait; opacity: .55; }
@@ -336,29 +337,7 @@ footer { margin-top: 34px; color: #66716d; font-size: 12px; text-align: center; 
 
 /* ── Redesign additions ─────────────────────────────────────── */
 
-/* Hero redesign: rich layered background */
-.hero::before {
-  position: absolute;
-  top: -180px;
-  right: -160px;
-  width: 360px;
-  height: 360px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 40% 40%, #dceded 0%, #cde8dd 35%, transparent 65%);
-  content: "";
-  pointer-events: none;
-}
-.hero::after {
-  position: absolute;
-  bottom: -100px;
-  left: -100px;
-  width: 280px;
-  height: 280px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 60% 60%, #f0e8d4 0%, #f5efe0 40%, transparent 70%);
-  content: "";
-  pointer-events: none;
-}
+/* (Hero redesign rules merged into the .hero block above to avoid duplication) */
 
 .hero-benefits { display: grid; gap: 12px; margin-top: 24px; }
 .hero-benefits li {
