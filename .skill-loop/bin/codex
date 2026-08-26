@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+real_codex="/home/inner/.local/bin/codex"
+
+if [[ "${1:-}" != "exec" ]]; then
+  exec "$real_codex" "$@"
+fi
+
+shift
+prompt="${1:-}"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+
+# skill-loop 0.6.0 appends Codex options after the positional prompt, while
+# current Codex CLI versions require options before it.
+exec "$real_codex" exec "$@" "$prompt"

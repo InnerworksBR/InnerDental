@@ -15,7 +15,17 @@ type TeamMember = { user_id: string; email: string | null; role: "owner" | "oper
 type Audit = { id: string; action: string; entity: string; actor_id: string | null; metadata: { changed_fields?: string[] } | null; created_at: string };
 type Snapshot = { procedures: Procedure[]; plans: Plan[]; professionals: Professional[]; faqs: Faq[]; patients: Patient[]; team: TeamMember[]; audits: Audit[] };
 
-const modules = ["Resumo", "Procedimentos", "Planos", "Agenda", "Conteúdo", "Pacientes", "Equipe", "Auditoria"] as const;
+const moduleLabels = ["Resumo", "Procedimentos", "Planos", "Agenda", "Conteúdo", "Pacientes", "Equipe", "Auditoria"] as const;
+const modules: { label: typeof moduleLabels[number]; icon: string }[] = [
+  { label: "Resumo", icon: "M4 6h16M4 12h16M4 18h7" },
+  { label: "Procedimentos", icon: "M9 12l2 2 4-4M12 3c-4.2 0-8 3.2-8 8 0 5.4 8 10 8 10s8-4.6 8-10c0-4.8-3.8-8-8-8z" },
+  { label: "Planos", icon: "M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2V9zM9 22V12h6v10" },
+  { label: "Agenda", icon: "M16 2v4M8 2v4M3 10h18" },
+  { label: "Conteúdo", icon: "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6" },
+  { label: "Pacientes", icon: "M4.5 21c.7-4.3 3.2-6.5 7.5-6.5s6.8 2.2 7.5 6.5" },
+  { label: "Equipe", icon: "M17 21v-2a4 4 0 00-2-3.5M7 21v-2a4 4 0 014-4" },
+  { label: "Auditoria", icon: "M12 7v5l3 3" },
+];
 const weekdays = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 const errorLabels: Record<string, string> = {
   NOME_JA_CADASTRADO: "Já existe um cadastro com esse nome.",
@@ -34,7 +44,7 @@ function timeLabel(value: string | null) { return value ? value.slice(0, 5) : ""
 function formatDate(value: string) { return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date(`${value}T12:00:00-03:00`)); }
 
 export function AdminManagement({ canManage }: { canManage: boolean }) {
-  const [module, setModule] = useState<(typeof modules)[number]>("Resumo");
+  const [module, setModule] = useState<typeof moduleLabels[number]>("Resumo");
   const [data, setData] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Carregando gestão…");
@@ -81,16 +91,16 @@ export function AdminManagement({ canManage }: { canManage: boolean }) {
     <header className="management-heading"><div><h2>Central de gestão</h2><p>{canManage ? "As alterações refletem no portal, na agenda e no WhatsApp" : "Consulta dos cadastros da clínica"}</p></div><button type="button" className="management-refresh" disabled={busy} onClick={() => void load()}><span aria-hidden="true">↻</span> Atualizar</button></header>
     <div className="management-workspace">
       <nav className="management-tabs" role="tablist" aria-label="Módulos de gestão">{modules.map((item) => {
-        const panelId = `management-panel-${item.toLowerCase()}`;
-        const tabId = `management-tab-${item.toLowerCase()}`;
-        return <button type="button" id={tabId} role="tab" aria-selected={module === item} aria-controls={panelId} tabIndex={module === item ? 0 : -1} className={module === item ? "active" : ""} onClick={() => setModule(item)} key={item} onKeyDown={(event) => {
+        const panelId = `management-panel-${item.label.toLowerCase()}`;
+        const tabId = `management-tab-${item.label.toLowerCase()}`;
+        return <button type="button" id={tabId} role="tab" aria-selected={module === item.label} aria-controls={panelId} tabIndex={module === item.label ? 0 : -1} className={module === item.label ? "active" : ""} onClick={() => setModule(item.label)} key={item.label} onKeyDown={(event) => {
           if (event.key !== "ArrowRight" && event.key !== "ArrowLeft" && event.key !== "Home" && event.key !== "End") return;
           event.preventDefault();
-          const currentIndex = modules.indexOf(module);
+          const currentIndex = moduleLabels.indexOf(module);
           const nextIndex = event.key === "ArrowRight" ? (currentIndex + 1) % modules.length : event.key === "ArrowLeft" ? (currentIndex - 1 + modules.length) % modules.length : event.key === "Home" ? 0 : modules.length - 1;
-          setModule(modules[nextIndex]);
-          requestAnimationFrame(() => { const el = document.getElementById(`management-tab-${modules[nextIndex].toLowerCase()}`); el?.focus(); });
-        }}><span>{item.charAt(0)}</span>{item}</button>;
+          setModule(moduleLabels[nextIndex]);
+          requestAnimationFrame(() => { const el = document.getElementById(`management-tab-${moduleLabels[nextIndex].toLowerCase()}`); el?.focus(); });
+        }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d={item.icon} /></svg><span>{item.label}</span></button>;
       })}</nav>
       <div className="management-content" role="tabpanel" id={`management-panel-${module.toLowerCase()}`} aria-labelledby={`management-tab-${module.toLowerCase()}`}>
         {message && <p className={`management-message ${messageTone}`} role={messageTone === "error" ? "alert" : "status"} aria-live="polite">{message}</p>}

@@ -63,5 +63,33 @@ export default function AccessPage() {
   async function requestCode() { const phone = getValues("phone"); const parsed = phoneSchema.safeParse({ phone }); if (!parsed.success) { setMessage(parsed.error.issues[0].message); return; } const normalizedPhone = phone.replace(/\D/g, ""); await fetch("/api/auth/request-code", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone: normalizedPhone }) }); setRequested(true); setMessage("Código enviado! Se o número puder receber mensagens, ele chega em instantes."); }
   async function verify(values: AccessFields) { const parsed = codeSchema.safeParse(values); if (!parsed.success) { setMessage(parsed.error.issues[0].message); return; } const normalizedPhone = values.phone.replace(/\D/g, ""); const response = await fetch("/api/auth/verify-code", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...values, phone: normalizedPhone }) }); if (!response.ok) { setMessage("Código inválido ou expirado. Solicite um novo código."); return; } router.push("/agenda"); }
   const busy = isSubmitting || validatingLink;
-  return <PortalShell showHeader={false}><section className="card access-card"><Link href="/" className="back-link">‹ Voltar</Link><p className="eyebrow">Acesso seguro</p><h1>Gerencie sua consulta</h1><p>Informe seu telefone com DDD. Enviaremos um código de 6 dígitos no WhatsApp. Não usamos senha.</p><form onSubmit={handleSubmit(verify)} noValidate><label htmlFor="phone">Telefone (com DDD)</label><input id="phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="(11) 98765-4321" disabled={validatingLink} aria-describedby="phone-hint" {...register("phone", { required: "Informe seu telefone.", onChange: (event) => { const formatted = formatBrazilianPhone(event.target.value); setValue("phone", formatted, { shouldDirty: true, shouldValidate: false }); } })} />{errors.phone && <p className="field-error">{errors.phone.message}</p>}<small id="phone-hint" className="muted">Você recebe o código no mesmo número que conversa com a clínica.</small>{requested && <><label htmlFor="code">Código de 6 dígitos</label><input className="code-input" id="code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="••••••" disabled={validatingLink} {...register("code", { required: "Informe o código." })} />{errors.code && <p className="field-error">{errors.code.message}</p>}</>}<div className="actions"><button type="button" className={requested ? "text-button" : "button"} onClick={requestCode} disabled={busy}>{requested ? "Reenviar código" : "Enviar código"}</button>{requested && <button className="button" disabled={busy}>{isSubmitting ? "Verificando…" : "Continuar"}</button>}</div></form>{message && <p className="notice" role="status">{message}</p>}</section></PortalShell>;
+  return <PortalShell showHeader={false}><section className="card access-card"><Link href="/" className="back-link">‹ Voltar</Link><p className="eyebrow">Acesso seguro</p><h1>Gerencie sua consulta</h1><p>Informe seu telefone com DDD. Enviaremos um código de 6 dígitos no WhatsApp. Não usamos senha.</p><form onSubmit={handleSubmit(verify)} noValidate>
+          <div className="input-with-icon">
+            <label htmlFor="phone">
+              <span className="input-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><use href="#phone" /></svg>
+              </span>
+              Telefone (com DDD)
+            </label>
+            <input id="phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="(11) 98765-4321" disabled={validatingLink} aria-describedby="phone-hint" {...register("phone", { required: "Informe seu telefone.", onChange: (event) => { const formatted = formatBrazilianPhone(event.target.value); setValue("phone", formatted, { shouldDirty: true, shouldValidate: false }); } })} />
+          </div>
+          {errors.phone && <p className="field-error">{errors.phone.message}</p>}
+          <small id="phone-hint" className="muted">Você recebe o código no mesmo número que conversa com a clínica.</small>
+          {requested && <>
+            <div className="input-with-icon">
+              <label htmlFor="code">
+                <span className="input-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><use href="#shield" /></svg>
+                </span>
+                Código de 6 dígitos
+              </label>
+              <input className="code-input" id="code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="••••••" disabled={validatingLink} {...register("code", { required: "Informe o código." })} />
+            </div>
+            {errors.code && <p className="field-error">{errors.code.message}</p>}
+          </>}
+          <div className="actions">
+            <button type="button" className={requested ? "text-button" : "button"} onClick={requestCode} disabled={busy}>{requested ? "Reenviar código" : "Enviar código"}</button>
+            {requested && <button className="button" disabled={busy}>{isSubmitting ? "Verificando…" : "Continuar"}</button>}
+          </div>
+        </form>{message && <p className="notice" role="status">{message}</p>}</section></PortalShell>;
 }

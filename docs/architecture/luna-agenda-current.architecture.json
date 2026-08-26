@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Luna Agenda — arquitetura atual",
+    "subtitle": "Componentes implementados no repositório em 28/07/2026",
+    "output": "docs/architecture/luna-agenda-current.html",
+    "visual_preset": "blueprint",
+    "animation": "none",
+    "quality_profile": "standard",
+    "viewBox": [1580, 940],
+    "views": [
+      {
+        "id": "portal-agenda",
+        "label": "01 · Portal e agenda",
+        "focus": ["patients", "web", "auth", "database", "calendar"],
+        "note": "O Next.js autentica a jornada, persiste o estado transacional e confirma a ocupação no Google Calendar."
+      },
+      {
+        "id": "whatsapp-async",
+        "label": "02 · WhatsApp assíncrono",
+        "focus": ["evolution", "web", "queues", "worker", "openai"],
+        "note": "Webhooks entram pelo BFF; inbox e outbox duráveis desacoplam o envio, a IA opcional e os retries."
+      },
+      {
+        "id": "internal-ops",
+        "label": "03 · Operação interna",
+        "focus": ["staff", "web", "auth", "database", "calendar"],
+        "note": "A equipe usa Supabase Auth e perfis internos para agenda, gestão, incidentes e bloqueios."
+      },
+      {
+        "id": "runtime-ops",
+        "label": "04 · Runtime e evidências",
+        "focus": ["ci", "web", "worker", "prometheus"],
+        "note": "Web e worker são imagens separadas; health checks, métricas e gates de CI sustentam a operação."
+      }
+    ]
+  },
+  "components": [
+    { "id": "patients", "type": "external", "label": "Pacientes", "sublabel": "portal mobile + WhatsApp", "pos": [45, 275], "size": [145, 64] },
+    { "id": "staff", "type": "external", "label": "Equipe interna", "sublabel": "owner + operator", "pos": [45, 425], "size": [145, 64] },
+    { "id": "web", "type": "frontend", "label": "Next.js Web / BFF", "sublabel": "portal + interno + APIs :3000", "pos": [285, 340], "size": [180, 68], "tag": "única borda pública" },
+    { "id": "auth", "type": "security", "label": "Supabase Auth", "sublabel": "sessão interna + perfis", "pos": [555, 105], "size": [165, 64], "tag": "acesso administrativo" },
+    { "id": "database", "type": "database", "label": "PostgreSQL / Supabase", "sublabel": "agenda + RLS + auditoria", "pos": [555, 340], "size": [180, 68], "tag": "estado transacional" },
+    { "id": "queues", "type": "messagebus", "label": "Outbox + Inbox", "sublabel": "leases + retry + dead-letter", "pos": [825, 455], "size": [180, 68], "tag": "tabelas PostgreSQL" },
+    { "id": "worker", "type": "backend", "label": "Worker TypeScript", "sublabel": "mensageria + confirmações", "pos": [1085, 455], "size": [180, 68], "tag": "processo privado" },
+    { "id": "calendar", "type": "external", "label": "Google Calendar", "sublabel": "ocupação + sincronização", "pos": [825, 105], "size": [180, 64], "tag": "fonte de ocupação" },
+    { "id": "evolution", "type": "external", "label": "Evolution API", "sublabel": "WhatsApp + webhook", "pos": [1350, 335], "size": [165, 64] },
+    { "id": "openai", "type": "external", "label": "OpenAI Responses", "sublabel": "resposta opcional + fallback", "pos": [1350, 565], "size": [165, 64] },
+    { "id": "prometheus", "type": "cloud", "label": "Prometheus", "sublabel": "scrape privado + alertas", "pos": [825, 700], "size": [180, 64], "tag": "profile observability" },
+    { "id": "ci", "type": "cloud", "label": "CI / Release", "sublabel": "testes + imagens + manifestos", "pos": [285, 700], "size": [180, 64], "tag": "GitHub Actions" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Runtime da aplicação · modelo Docker / EasyPanel", "wraps": ["web", "worker", "prometheus", "ci"], "pad": 28 },
+    { "kind": "security-group", "label": "Backplane privado", "wraps": ["worker", "prometheus"], "pad": 20 },
+    { "kind": "region", "label": "Supabase gerenciado", "wraps": ["auth", "database", "queues"], "pad": 26 }
+  ],
+  "connections": [
+    { "id": "patient-portal", "from": "patients", "to": "web", "label": "HTTPS", "variant": "emphasis" },
+    { "id": "staff-console", "from": "staff", "to": "web", "label": "HTTPS", "variant": "security" },
+    { "id": "web-auth", "from": "web", "to": "auth", "label": "Supabase Auth", "variant": "security", "fromSide": "top", "toSide": "left", "route": "orthogonal-h", "via": [[375, 255], [520, 255], [520, 137]] },
+    { "id": "web-database", "from": "web", "to": "database", "label": "RPC + service role", "variant": "security", "labelAt": [510, 422] },
+    { "id": "web-calendar", "from": "web", "to": "calendar", "label": "freebusy + eventos", "variant": "emphasis", "fromSide": "top", "toSide": "left", "via": [[375, 230], [785, 230], [785, 137]], "labelAt": [655, 218] },
+    { "id": "web-enqueue", "from": "web", "to": "queues", "label": "eventos duráveis", "variant": "dashed", "fromSide": "bottom", "toSide": "left", "via": [[375, 555], [785, 555], [785, 489]], "labelAt": [650, 543] },
+    { "id": "evolution-webhook", "from": "evolution", "to": "web", "label": "webhook autenticado", "variant": "security", "fromSide": "top", "toSide": "top", "via": [[1432, 35], [375, 35]], "labelAt": [1150, 23] },
+    { "id": "queues-worker", "from": "queues", "to": "worker", "label": "SKIP LOCKED + lease", "variant": "emphasis", "labelAt": [1045, 537] },
+    { "id": "worker-database", "from": "worker", "to": "database", "label": "RPC + leituras", "variant": "security", "fromSide": "top", "toSide": "right", "via": [[1175, 300], [735, 300], [735, 374]], "labelAt": [965, 288] },
+    { "id": "worker-evolution", "from": "worker", "to": "evolution", "label": "mensagens + botões", "variant": "emphasis", "fromSide": "right", "toSide": "bottom", "route": "orthogonal-h" },
+    { "id": "worker-openai", "from": "worker", "to": "openai", "label": "Responses API", "variant": "dashed", "fromSide": "right", "toSide": "left", "route": "orthogonal-h" },
+    { "id": "worker-calendar", "from": "worker", "to": "calendar", "label": "sync 8 dias", "variant": "dashed", "fromSide": "top", "toSide": "right", "via": [[1175, 205], [1045, 205], [1045, 137]], "labelAt": [1110, 193] },
+    { "id": "prometheus-web", "from": "prometheus", "to": "web", "label": "scrape /metrics", "variant": "dashed", "fromSide": "left", "toSide": "bottom", "via": [[785, 732], [520, 732], [520, 620], [375, 620], [375, 408]], "labelAt": [635, 720] },
+    { "id": "prometheus-worker", "from": "prometheus", "to": "worker", "label": "scrape privado", "variant": "dashed", "fromSide": "right", "toSide": "bottom", "route": "orthogonal-h" },
+    { "id": "ci-web", "from": "ci", "to": "web", "label": "imagem web", "variant": "dashed", "fromSide": "top", "toSide": "bottom" },
+    { "id": "ci-worker", "from": "ci", "to": "worker", "label": "imagem worker", "variant": "dashed", "fromSide": "right", "toSide": "bottom", "via": [[500, 815], [1175, 815]], "labelAt": [835, 803] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Jornadas síncronas", "items": ["Portal do paciente e painel interno no mesmo Next.js", "Google Calendar confirma ocupação antes da persistência da agenda", "Supabase Auth é exclusivo para colaboradores internos"] },
+    { "dot": "emerald", "title": "Processamento assíncrono", "items": ["Inbox/outbox usam leases, retry e dead-letter", "Worker envia OTPs, lembretes, confirmações e handoffs", "IA é opcional; respostas estruturadas permanecem como fallback"] },
+    { "dot": "rose", "title": "Limites atuais", "items": ["Somente o web publica porta; worker e métricas ficam no backplane", "RLS, auditoria e segredos permanecem no servidor", "O diagrama representa código/configuração; rollout externo deve ser verificado separadamente"] }
+  ]
+}

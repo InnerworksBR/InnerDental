@@ -217,19 +217,148 @@ export default function AgendaPage() {
           <small style={{ marginLeft: 8 }} aria-live="polite">Passo {bookingStep} de 4 — {stepLabels[bookingStep - 1]}</small>
         </div>
         {notice && <p className="notice" role="status">{notice}</p>}
-        {needsProfile && <fieldset className="profile-fields"><legend>Antes de continuar, conte um pouco sobre você</legend>{needsPatientName && <><label htmlFor="patient-name">Nome completo</label><input id="patient-name" value={patientName} onChange={(event) => setPatientName(event.target.value)} placeholder="Como podemos te chamar?" required /></>}{needsInsurancePlan && <><label htmlFor="insurance-plan">Plano odontológico</label><select id="insurance-plan" value={insurancePlanId} onChange={(event) => setInsurancePlanId(event.target.value)} required><option value="">Selecione seu plano</option>{plans.map((plan) => <option value={plan.id} key={plan.id}>{plan.name}</option>)}</select></>}<small>Se tiver dúvidas sobre a cobertura, a equipe confirma antes do atendimento.</small></fieldset>}
-        <strong className="booking-label">Profissional</strong>
-        <div className="professional-list">{professionals.map((item) => <button type="button" className={`professional-option ${professionalId === item.id ? "chosen" : ""}`} key={item.id} onClick={() => setProfessionalId(item.id)}><span>{initials(item.name)}</span><i><b>{item.name}</b><small>Atendimento odontológico</small></i><em /></button>)}</div>
-        {editing ? <p className="party-summary">Esta consulta reserva {bookingPartySize === 2 ? "dois horários consecutivos (30 minutos)" : "um horário (15 minutos)"}.</p> : <fieldset className="party-fields"><legend>Outra pessoa também vai se consultar junto?</legend><div className="party-options"><button type="button" aria-pressed={partySize === 1} className={partySize === 1 ? "chosen" : ""} onClick={() => { setPartySize(1); setCompanionName(""); setSelectedTime(""); }}>Não, somente eu</button><button type="button" aria-pressed={partySize === 2} className={partySize === 2 ? "chosen" : ""} onClick={() => { setPartySize(2); setSelectedTime(""); }}>Sim, duas pessoas</button></div>{partySize === 2 && <><label htmlFor="companion-name">Nome da segunda pessoa</label><input id="companion-name" value={companionName} onChange={(event) => setCompanionName(event.target.value)} placeholder="Nome completo" minLength={2} maxLength={160} required /><small>Vamos reservar dois horários consecutivos. Esse nome ficará somente no evento desta consulta.</small></>}</fieldset>}
-        <strong className="booking-label">Data</strong>
-        {availabilityStatus === "idle" && <p className="availability-message">Selecione um profissional para ver as datas disponíveis.</p>}
-        {availabilityStatus === "loading" && <p className="availability-message availability-loading" role="status"><i />Buscando os melhores horários…</p>}
-        {availabilityStatus === "error" && <p className="availability-message" role="alert">Não foi possível consultar a agenda. <button type="button" className="text-button" onClick={() => setAvailabilityRevision((current) => current + 1)}>Tentar novamente</button></p>}
-        {availabilityStatus === "ready" && visibleDays.length === 0 && <p className="availability-message" role="status">{bookingPartySize === 2 ? "Não encontramos dois horários consecutivos livres nas próximas semanas." : "Não encontramos horários livres nas próximas semanas."}</p>}
-        {visibleDays.length > 0 && <div className="days">{visibleDays.map((item) => { const itemDate = new Date(`${item.date}T12:00:00-03:00`); return <button type="button" className={effectiveDate === item.date ? "chosen" : ""} key={item.date} onClick={() => { setDate(item.date); setSelectedTime(""); }}><small>{new Intl.DateTimeFormat("pt-BR", { weekday: "short" }).format(itemDate).replace(".", "")}</small><b>{itemDate.getDate()}</b></button>; })}</div>}
-        <strong className="booking-label">Horários disponíveis</strong>
-        <div className="slot-grid">{slots.map((slot) => { const value = hour(slot.startAt); return <button type="button" className={selectedTime === value ? "slot selected" : "slot"} onClick={() => setSelectedTime(value)} key={slot.startAt}>{value}</button>; })}</div>
-        {notOnlineBookableProcedures.length > 0 && <aside className="booking-limitations" aria-labelledby="booking-limitations-title"><h2 id="booking-limitations-title">Antes de confirmar</h2><p>Estes atendimentos não são marcados diretamente pelo portal:</p><ul>{notOnlineBookableProcedures.map((procedure) => <li key={procedure.id}><b>{procedure.name}</b>{procedure.description && <span>{procedure.description}</span>}</li>)}</ul><p>Se precisar de um deles, fale com a equipe.</p></aside>}
+        {needsProfile && (
+          <fieldset className="profile-fields booking-section">
+            <div className="booking-section-header">
+              <span className="icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><use href="#user" /></svg>
+              </span>
+              <legend>Antes de continuar, conte um pouco sobre você</legend>
+            </div>
+            {needsPatientName && <>
+              <label htmlFor="patient-name">Nome completo</label>
+              <input id="patient-name" value={patientName} onChange={(event) => setPatientName(event.target.value)} placeholder="Como podemos te chamar?" required />
+            </>}
+            {needsInsurancePlan && <>
+              <label htmlFor="insurance-plan">Plano odontológico</label>
+              <select id="insurance-plan" value={insurancePlanId} onChange={(event) => setInsurancePlanId(event.target.value)} required>
+                <option value="">Selecione seu plano</option>
+                {plans.map((plan) => <option value={plan.id} key={plan.id}>{plan.name}</option>)}
+              </select>
+            </>}
+            <small>Se tiver dúvidas sobre a cobertura, a equipe confirma antes do atendimento.</small>
+          </fieldset>
+        )}
+
+        <div className="booking-section">
+          <div className="booking-section-header">
+            <span className="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><use href="#user" /></svg>
+            </span>
+            <strong>Profissional</strong>
+          </div>
+          <div className="professional-list">
+            {professionals.map((item) => (
+              <button type="button" className={`professional-option ${professionalId === item.id ? "chosen" : ""}`} key={item.id} onClick={() => setProfessionalId(item.id)}>
+                <span>{initials(item.name)}</span>
+                <i><b>{item.name}</b><small>Atendimento odontológico</small></i>
+                <em />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {editing ? (
+          <p className="party-summary booking-section">Esta consulta reserva {bookingPartySize === 2 ? "dois horários consecutivos (30 minutos)" : "um horário (15 minutos)"}..</p>
+        ) : (
+          <fieldset className="party-fields booking-section">
+            <div className="booking-section-header">
+              <span className="icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><use href="#user" /></svg>
+              </span>
+              <legend>Outra pessoa também vai se consultar junto?</legend>
+            </div>
+            <div className="party-options">
+              <button type="button" aria-pressed={partySize === 1} className={partySize === 1 ? "chosen" : ""} onClick={() => { setPartySize(1); setCompanionName(""); setSelectedTime(""); }}>Não, somente eu</button>
+              <button type="button" aria-pressed={partySize === 2} className={partySize === 2 ? "chosen" : ""} onClick={() => { setPartySize(2); setSelectedTime(""); }}>Sim, duas pessoas</button>
+            </div>
+            {partySize === 2 && <>
+              <label htmlFor="companion-name">Nome da segunda pessoa</label>
+              <input id="companion-name" value={companionName} onChange={(event) => setCompanionName(event.target.value)} placeholder="Nome completo" minLength={2} maxLength={160} required />
+              <small>Vamos reservar dois horários consecutivos. Esse nome ficará somente no evento desta consulta.</small>
+            </>}
+          </fieldset>
+        )}
+
+        <div className="booking-section">
+          <div className="booking-section-header">
+            <span className="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><use href="#calendar" /></svg>
+            </span>
+            <strong>Data</strong>
+          </div>
+          {availabilityStatus === "idle" && <p className="availability-message">Selecione um profissional para ver as datas disponíveis.</p>}
+          {availabilityStatus === "loading" && <p className="availability-message availability-loading" role="status"><i />Buscando os melhores horários…</p>}
+          {availabilityStatus === "error" && <p className="availability-message" role="alert">Não foi possível consultar a agenda. <button type="button" className="text-button" onClick={() => setAvailabilityRevision((current) => current + 1)}>Tentar novamente</button></p>}
+          {availabilityStatus === "ready" && visibleDays.length === 0 && <p className="availability-message" role="status">{bookingPartySize === 2 ? "Não encontramos dois horários consecutivos livres nas próximas semanas." : "Não encontramos horários livres nas próximas semanas."}</p>}
+          {visibleDays.length > 0 && <div className="days">{visibleDays.map((item) => { const itemDate = new Date(`${item.date}T12:00:00-03:00`); return <button type="button" className={effectiveDate === item.date ? "chosen" : ""} key={item.date} onClick={() => { setDate(item.date); setSelectedTime(""); }}><small>{new Intl.DateTimeFormat("pt-BR", { weekday: "short" }).format(itemDate).replace(".", "")}</small><b>{itemDate.getDate()}</b></button>; })}</div>}
+        </div>
+
+        <div className="booking-section">
+          <div className="booking-section-header">
+            <span className="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><use href="#clock" /></svg>
+            </span>
+            <strong>Horários disponíveis</strong>
+          </div>
+          {(() => {
+            const morningSlots = slots.filter((slot) => { const h = parseInt(slot.startAt.split("T")[1].split(":")[0], 10); return h < 12; });
+            const afternoonSlots = slots.filter((slot) => { const h = parseInt(slot.startAt.split("T")[1].split(":")[0], 10); return h >= 12; });
+            return (
+              <>
+                {morningSlots.length > 0 && (
+                  <div className="slot-section">
+                    <p className="slot-section-label">
+                      <span className="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#clock" /></svg></span>
+                      Manhã
+                    </p>
+                    <div className="slot-grid">
+                      {morningSlots.map((slot) => {
+                        const value = hour(slot.startAt);
+                        return <button type="button" className={`slot ${selectedTime === value ? "selected" : ""}`} onClick={() => setSelectedTime(value)} key={slot.startAt}>{value}</button>;
+                      })}
+                    </div>
+                  </div>
+                )}
+                {afternoonSlots.length > 0 && (
+                  <div className="slot-section">
+                    <p className="slot-section-label">
+                      <span className="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#clock" /></svg></span>
+                      Tarde
+                    </p>
+                    <div className="slot-grid">
+                      {afternoonSlots.map((slot) => {
+                        const value = hour(slot.startAt);
+                        return <button type="button" className={`slot ${selectedTime === value ? "selected" : ""}`} onClick={() => setSelectedTime(value)} key={slot.startAt}>{value}</button>;
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </div>
+
+        {notOnlineBookableProcedures.length > 0 && (
+          <aside className="booking-limitations" aria-labelledby="booking-limitations-title">
+            <h2 id="booking-limitations-title">
+              <span className="icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><use href="#warning" /></svg>
+              </span>
+              Antes de confirmar
+            </h2>
+            <p>Estes atendimentos não são marcados diretamente pelo portal:</p>
+            <ul>
+              {notOnlineBookableProcedures.map((procedure) => (
+                <li key={procedure.id}>
+                  <b>{procedure.name}</b>
+                  {procedure.description && <span>{procedure.description}</span>}
+                </li>
+              ))}
+            </ul>
+            <p>Se precisar de um deles, fale com a equipe.</p>
+          </aside>
+        )}
         <div className="booking-summary" aria-label="Resumo da reserva">
           <div className="booking-summary-text">
             {selectedProfessional && selectedTime ? (
@@ -265,7 +394,51 @@ export default function AgendaPage() {
             )}
           </p>
         )}
-        <div className="appointment-list">{appointments.length === 0 ? <article className="empty"><h2>Nenhuma consulta futura</h2><p>Quando quiser, escolha um horário disponível.</p></article> : appointments.map((item) => { const professional = Array.isArray(item.professionals) ? item.professionals[0]?.name : item.professionals?.name; return <article className="appointment" key={item.id}><b>Consulta odontológica</b><p className="appointment-date">{new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date(item.start_at))}</p><p>{professional ?? "Profissional"}</p>{canceling === item.id ? <div className="cancel-choice"><span>Cancelar esta consulta?</span><button type="button" className="danger text-button" onClick={() => void cancel(item)}>Sim, cancelar</button><button type="button" className="text-button muted" onClick={() => setCanceling(null)}>Manter</button></div> : <div className="appointment-actions"><button type="button" className="text-button" onClick={() => startBooking(item)}>Remarcar</button><button type="button" className="text-button danger" onClick={() => setCanceling(item.id)}>Cancelar</button></div>}</article>; })}</div>
+        <div className="appointment-list">
+          {appointments.length === 0 ? (
+            <article className="empty">
+              <div className="empty-icon" aria-hidden="true">
+                <span className="icon">
+                  <svg viewBox="0 0 24 24"><use href="#calendar-check" /></svg>
+                </span>
+              </div>
+              <h2>Nenhuma consulta futura</h2>
+              <p>Quando quiser, escolha um horário disponível.</p>
+            </article>
+          ) : appointments.map((item) => {
+            const professional = Array.isArray(item.professionals) ? item.professionals[0]?.name : item.professionals?.name;
+            const isPast = new Date(item.end_at) < new Date();
+            return (
+              <article className={`appointment ${isPast ? "past" : ""}`} key={item.id}>
+                <b>Consulta odontológica</b>
+                <p className="appointment-date">
+                  <span className="icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><use href="#calendar" /></svg>
+                  </span>
+                  {new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date(item.start_at))}
+                </p>
+                <div className="appointment-meta">
+                  <span className="icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><use href="#user" /></svg>
+                  </span>
+                  <p>{professional ?? "Profissional"}</p>
+                </div>
+                {canceling === item.id ? (
+                  <div className="cancel-choice">
+                    <span>Cancelar esta consulta?</span>
+                    <button type="button" className="danger text-button" onClick={() => void cancel(item)}>Sim, cancelar</button>
+                    <button type="button" className="text-button muted" onClick={() => setCanceling(null)}>Manter</button>
+                  </div>
+                ) : !isPast && (
+                  <div className="appointment-actions">
+                    <button type="button" className="text-button" onClick={() => startBooking(item)}>Remarcar</button>
+                    <button type="button" className="text-button danger" onClick={() => setCanceling(item.id)}>Cancelar</button>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
         <button type="button" className="button booking-confirm" onClick={() => startBooking()}>Marcar consulta</button>
       </section>
     </PortalShell>

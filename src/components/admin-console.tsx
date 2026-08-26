@@ -130,21 +130,30 @@ export function AdminConsole({ date, dateLabel, weekDates, role, canManage, agen
     <main className="portal-shell admin-shell admin-workspace">
       <a className="skip-link" href="#ops-main-content">Ir para o conteúdo</a>
       <aside className="ops-sidebar">
-        <div className="ops-brand"><i>L</i><span><b>Luna</b><small>Clínica odontológica</small></span></div>
+        <div className="ops-brand"><span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 3c0 0 2 2 4 2s4-2 4-2c0 4-1 7-4 10-3-3-4-6-4-10z" /><path d="M9 15v4M15 15v4" /><path d="M8 3v2c0 2 .5 3 1.5 4M16 3v2c0 2-.5 3-1.5 4" /></svg></span><span><b>Luna</b><small>Clínica odontológica</small></span></div>
         <div className="ops-user"><span aria-hidden="true">{role.charAt(0)}</span><div><b>{role}</b><small>Acesso interno</small></div></div>
         <nav className="ops-side-nav" aria-label="Navegação principal">{navigation}</nav>
         <div className="ops-sidebar-footer"><span>Sessão protegida</span><AdminSessionActions /></div>
       </aside>
 
       <section className="ops-main">
-        <header className="ops-mobile-header"><div className="ops-brand"><i>L</i><span><b>Luna</b><small>Ops</small></span></div><AdminSessionActions /></header>
+        <header className="ops-mobile-header"><div className="ops-brand"><span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 3c0 0 2 2 4 2s4-2 4-2c0 4-1 7-4 10-3-3-4-6-4-10z" /><path d="M9 15v4M15 15v4" /><path d="M8 3v2c0 2 .5 3 1.5 4M16 3v2c0 2-.5 3-1.5 4" /></svg></span><span><b>Luna</b><small>Ops</small></span></div><AdminSessionActions /></header>
         <div className="ops-content" id="ops-main-content" tabIndex={-1}>
           {tab === "Hoje" && <>
             <PageHeader eyebrow={`Área interna · ${role}`} title="Visão de hoje" subtitle={dateLabel} />
             <div className="ops-stats" aria-label="Resumo do dia">
-              <b>{todayAgenda.appointments.length}<small>consultas marcadas</small></b>
-              <b>{todayAgenda.calendarEvents.length}<small>eventos no Google</small></b>
-              <b className="amber">{openIncidents}<small>incidentes abertos</small></b>
+              <b>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="3" /><path d="M16 2v4M8 2v4M3 10h18" /></svg>
+                {todayAgenda.appointments.length}<small>consultas marcadas</small>
+              </b>
+              <b>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></svg>
+                {todayAgenda.calendarEvents.length}<small>eventos no Google</small>
+              </b>
+              <b className="amber">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3L2.5 20h19L12 3z" /><path d="M12 10v4M12 17v1" /></svg>
+                {openIncidents}<small>incidentes abertos</small>
+              </b>
             </div>
             <CalendarStatusWarning status={agenda.calendarStatus} />
             <div className="ops-dashboard-grid">
@@ -184,14 +193,14 @@ export function AdminConsole({ date, dateLabel, weekDates, role, canManage, agen
 
           {tab === "Pacientes" && <>
             <PageHeader eyebrow="Atendimento" title="Pacientes de hoje" subtitle={`${todayAgenda.appointments.length} ${todayAgenda.appointments.length === 1 ? "paciente agendado" : "pacientes agendados"}`} />
-            {todayAgenda.appointments.length === 0 ? <section className="ops-empty-state"><span aria-hidden="true">✓</span><h2>Nenhum paciente aguardado</h2><p>A agenda de hoje não possui consultas marcadas.</p></section> : <div className="ops-list ops-patient-grid">{todayAgenda.appointments.map((item) => <article className="ops-card ops-patient-card" key={item.id}><span className="ops-avatar" aria-hidden="true">{initials(item.patientName)}</span><div><b>{item.patientName}</b><p>{appointmentTime.format(new Date(item.startAt))} · {item.professionalName}</p><small>{item.maskedPhone}</small></div><button type="button" className="text-button">Enviar lembrete</button></article>)}</div>}
+            {todayAgenda.appointments.length === 0 ? <section className="ops-empty-state"><div className="empty-illustration" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" /><path d="M4.5 21c.7-4.3 3.2-6.5 7.5-6.5s6.8 2.2 7.5 6.5" /></svg></div><h2>Nenhum paciente aguardado</h2><p>A agenda de hoje não possui consultas marcadas.</p></section> : <div className="ops-list ops-patient-grid">{todayAgenda.appointments.map((item) => <article className="ops-card ops-patient-card" key={item.id}><span className="ops-avatar" aria-hidden="true">{initials(item.patientName)}</span><div><b>{item.patientName}</b><p>{appointmentTime.format(new Date(item.startAt))} · {item.professionalName}</p><small>{item.maskedPhone}</small></div><button type="button" className="text-button">Enviar lembrete</button></article>)}</div>}
           </>}
 
           {tab === "Mensagens" && <>
             <PageHeader eyebrow="Comunicação" title="Mensagens" subtitle="WhatsApp e notificações automáticas" />
             <div className="ops-message-columns">
-              <section><header className="ops-column-title"><div><p className="eyebrow">Entrada</p><h2>Recebidas</h2></div><span>{activity.inbox.length}</span></header><div className="ops-list">{activity.inbox.length === 0 ? <p className="ops-week-empty">Nenhuma mensagem recebida.</p> : activity.inbox.map((item) => <article className="ops-card" key={`i-${item.id}`}><b>{item.phone}</b><p>{item.classified_intent ?? "Mensagem recebida"}</p><small>{item.processed_action ?? item.status}</small></article>)}</div></section>
-              <section><header className="ops-column-title"><div><p className="eyebrow">Saída</p><h2>Notificações</h2></div><span>{activity.outbox.length}</span></header><div className="ops-list">{activity.outbox.length === 0 ? <p className="ops-week-empty">Nenhuma notificação recente.</p> : activity.outbox.map((item) => <article className="ops-card" key={`o-${item.id}`}><b>{item.event_type}</b><p>{item.status}{item.attempts ? ` · ${item.attempts} tentativa(s)` : ""}</p></article>)}</div></section>
+              <section><header className="ops-column-title"><div><p className="eyebrow">Entrada</p><h2>Recebidas</h2></div><span>{activity.inbox.length}</span></header><div className="ops-list">{activity.inbox.length === 0 ? <section className="ops-empty-state"><div className="empty-illustration" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 18.5 3.5 22l4.4-1.5c1.2.6 2.6 1 4.1 1 5 0 9-3.8 9-8.5S17 4.5 12 4.5 3 8.3 3 13c0 2.1.7 4 2 5.5Z" /><path d="M8 11h8M8 15h5" /></svg></div><h2>Nenhuma mensagem recebida</h2><p>As mensagens do WhatsApp aparecerão aqui.</p></section> : activity.inbox.map((item) => <article className="ops-card" key={`i-${item.id}`}><b>{item.phone}</b><p>{item.classified_intent ?? "Mensagem recebida"}</p><small>{item.processed_action ?? item.status}</small></article>)}</div></section>
+              <section><header className="ops-column-title"><div><p className="eyebrow">Saída</p><h2>Notificações</h2></div><span>{activity.outbox.length}</span></header><div className="ops-list">{activity.outbox.length === 0 ? <section className="ops-empty-state"><div className="empty-illustration" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg></div><h2>Nenhuma notificação recente</h2><p>Os envios automáticos aparecerão aqui.</p></section> : activity.outbox.map((item) => <article className="ops-card" key={`o-${item.id}`}><b>{item.event_type}</b><p>{item.status}{item.attempts ? ` · ${item.attempts} tentativa(s)` : ""}</p></article>)}</div></section>
             </div>
           </>}
 
