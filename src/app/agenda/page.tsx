@@ -180,7 +180,7 @@ export default function AgendaPage() {
     const response = await fetch(`/api/appointments/${item.id}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ idempotencyKey: idempotencyKey() }) });
     setSaving(false);
     setCanceling(null);
-    setNotice(response.ok ? "Consulta cancelada." : "Não foi possível cancelar. É preciso ter 24 horas de antecedência.");
+    setNotice(response.ok ? "Consulta cancelada. Vamos avisar a Dra. Priscila agora. Se quiser, é só marcar outra vez." : "Não foi possível cancelar. É preciso ter 24 horas de antecedência.");
     if (response.ok) {
       setAvailabilityRevision((current) => current + 1);
       await refresh();
@@ -193,12 +193,29 @@ export default function AgendaPage() {
     finally { window.location.assign("/"); }
   }
 
+  const bookingStep = editing
+    ? 4
+    : needsProfile ? 1
+    : !professionalId ? 2
+    : !selectedTime ? 3
+    : 4;
+  const stepLabels = ["Sobre você", "Profissional", "Data e hora", "Confirmação"];
   if (view === "booking") return (
     <PortalShell showHeader={false}>
       <section className="booking-screen">
         <button type="button" className="back-link" onClick={() => setView("agenda")}>‹ Voltar</button>
         <p className="eyebrow">{editing ? "Remarcar consulta" : "Nova consulta"}</p>
         <h1>Escolha um horário disponível</h1>
+        <div className="booking-stepper" aria-label={`Passo ${bookingStep} de 4: ${stepLabels[bookingStep - 1]}`}>
+          {stepLabels.map((label, index) => {
+            const position = index + 1;
+            const status = position < bookingStep ? "done" : position === bookingStep ? "current" : "";
+            return (
+              <span key={label} className={status} aria-hidden="true">{position}</span>
+            );
+          })}
+          <small style={{ marginLeft: 8 }} aria-live="polite">Passo {bookingStep} de 4 — {stepLabels[bookingStep - 1]}</small>
+        </div>
         {notice && <p className="notice" role="status">{notice}</p>}
         {needsProfile && <fieldset className="profile-fields"><legend>Antes de continuar, conte um pouco sobre você</legend>{needsPatientName && <><label htmlFor="patient-name">Nome completo</label><input id="patient-name" value={patientName} onChange={(event) => setPatientName(event.target.value)} placeholder="Como podemos te chamar?" required /></>}{needsInsurancePlan && <><label htmlFor="insurance-plan">Plano odontológico</label><select id="insurance-plan" value={insurancePlanId} onChange={(event) => setInsurancePlanId(event.target.value)} required><option value="">Selecione seu plano</option>{plans.map((plan) => <option value={plan.id} key={plan.id}>{plan.name}</option>)}</select></>}<small>Se tiver dúvidas sobre a cobertura, a equipe confirma antes do atendimento.</small></fieldset>}
         <strong className="booking-label">Profissional</strong>
@@ -212,9 +229,23 @@ export default function AgendaPage() {
         {visibleDays.length > 0 && <div className="days">{visibleDays.map((item) => { const itemDate = new Date(`${item.date}T12:00:00-03:00`); return <button type="button" className={effectiveDate === item.date ? "chosen" : ""} key={item.date} onClick={() => { setDate(item.date); setSelectedTime(""); }}><small>{new Intl.DateTimeFormat("pt-BR", { weekday: "short" }).format(itemDate).replace(".", "")}</small><b>{itemDate.getDate()}</b></button>; })}</div>}
         <strong className="booking-label">Horários disponíveis</strong>
         <div className="slot-grid">{slots.map((slot) => { const value = hour(slot.startAt); return <button type="button" className={selectedTime === value ? "slot selected" : "slot"} onClick={() => setSelectedTime(value)} key={slot.startAt}>{value}</button>; })}</div>
-        {selectedTime && <p className="notice">{selectedProfessional?.name} · {selectedTime} · {bookingPartySize === 2 ? "2 pessoas · 30 minutos" : "15 minutos"}</p>}
         {notOnlineBookableProcedures.length > 0 && <aside className="booking-limitations" aria-labelledby="booking-limitations-title"><h2 id="booking-limitations-title">Antes de confirmar</h2><p>Estes atendimentos não são marcados diretamente pelo portal:</p><ul>{notOnlineBookableProcedures.map((procedure) => <li key={procedure.id}><b>{procedure.name}</b>{procedure.description && <span>{procedure.description}</span>}</li>)}</ul><p>Se precisar de um deles, fale com a equipe.</p></aside>}
-        <button type="button" className="button booking-confirm" disabled={!selectedTime || saving || !profileInputComplete || (!editing && partySize === 2 && companionName.trim().length < 2)} onClick={() => void save()}>{saving ? "Confirmando…" : editing ? "Confirmar remarcação" : "Confirmar consulta"}</button>
+        <div className="booking-summary" aria-label="Resumo da reserva">
+          <div className="booking-summary-text">
+            {selectedProfessional && selectedTime ? (
+              <>
+                <b>{selectedProfessional.name}</b>
+                <small>{selectedTime} · {bookingPartySize === 2 ? "2 pessoas · 30 minutos" : "15 minutos"}</small>
+              </>
+            ) : (
+              <>
+                <b>Escolha profissional e horário</b>
+                <small>O resumo aparece aqui assim que você define data e hora.</small>
+              </>
+            )}
+          </div>
+          <button type="button" className="button booking-confirm" disabled={!selectedTime || saving || !profileInputComplete || (!editing && partySize === 2 && companionName.trim().length < 2)} onClick={() => void save()}>{saving ? "Confirmando…" : editing ? "Confirmar remarcação" : "Confirmar consulta"}</button>
+        </div>
       </section>
     </PortalShell>
   );
@@ -223,7 +254,17 @@ export default function AgendaPage() {
     <PortalShell showHeader={false}>
       <section className="agenda-screen">
         <header><div><p className="eyebrow">Minha agenda</p><h1>Suas consultas</h1></div><button type="button" className="text-button" onClick={() => void logout()} disabled={saving}>Sair</button></header>
-        {notice && <p className="notice" role="status">{notice}</p>}
+        {notice && (
+          <p className="notice" role="status">
+            {notice}
+            {notice.startsWith("Consulta cancelada.") && (
+              <>
+                {" "}
+                <button type="button" className="text-button" onClick={() => startBooking()}>Marcar nova consulta</button>
+              </>
+            )}
+          </p>
+        )}
         <div className="appointment-list">{appointments.length === 0 ? <article className="empty"><h2>Nenhuma consulta futura</h2><p>Quando quiser, escolha um horário disponível.</p></article> : appointments.map((item) => { const professional = Array.isArray(item.professionals) ? item.professionals[0]?.name : item.professionals?.name; return <article className="appointment" key={item.id}><b>Consulta odontológica</b><p className="appointment-date">{new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date(item.start_at))}</p><p>{professional ?? "Profissional"}</p>{canceling === item.id ? <div className="cancel-choice"><span>Cancelar esta consulta?</span><button type="button" className="danger text-button" onClick={() => void cancel(item)}>Sim, cancelar</button><button type="button" className="text-button muted" onClick={() => setCanceling(null)}>Manter</button></div> : <div className="appointment-actions"><button type="button" className="text-button" onClick={() => startBooking(item)}>Remarcar</button><button type="button" className="text-button danger" onClick={() => setCanceling(item.id)}>Cancelar</button></div>}</article>; })}</div>
         <button type="button" className="button booking-confirm" onClick={() => startBooking()}>Marcar consulta</button>
       </section>
