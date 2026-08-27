@@ -258,7 +258,6 @@ describe("incident-018 definitive WhatsApp routing", () => {
           p_phone: "5513999999999",
           p_insurance_plan_id: "particular-id",
           p_prompted_by_inbox_id: session.prompted_by_inbox_id,
-          p_answer_inbox_id: "00000000-0000-4000-8000-000000000031",
         });
         return { data: true, error: null };
       }
@@ -389,7 +388,10 @@ describe("incident-018 definitive WhatsApp routing", () => {
         ...session,
         status: "accepted",
         insurance_plan_id: value.p_insurance_plan_id,
-        accepted_by_inbox_id: value.p_answer_inbox_id,
+        // Migration 026 dropped p_answer_inbox_id from the RPC; the session
+        // schema still tracks it separately for audit purposes, so the
+        // worker-derived `row.id` is what feeds accepted_by_inbox_id.
+        accepted_by_inbox_id: answerId,
       };
       return { data: true, error: null };
     });
@@ -767,11 +769,18 @@ describe("incident-018 definitive WhatsApp routing", () => {
     const updates: Record<string, unknown>[] = [];
     const db = {
       from: () => ({ update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) }),
-      rpc: vi.fn().mockResolvedValue({ data: true, error: null }),
+      rpc: vi.fn().mockImplementation(async (name: string) => {
+        if (name === "read_whatsapp_conversation_slots") return { data: null, error: null };
+        if (name === "prepare_whatsapp_access_link") return { data: preparedAccessLink("llm-link"), error: null };
+        if (name === "mark_whatsapp_access_link_delivered") return { data: true, error: null };
+        return { data: true, error: null };
+      }),
     };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
     const worker = new MessagingWorker(db as never, evolution as never, {
       planTriageEnabled: false,
+      portalBaseUrl: "https://agenda.example",
+      otpSecret: testOtpSecret,
       pollMs: 100,
       healthPort: 3001,
       allowedRecipients: ["5513999999999"],
@@ -783,7 +792,10 @@ describe("incident-018 definitive WhatsApp routing", () => {
 
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000100", phone: "5513999999999", message_text: "quero remarcar", attempts: 1 });
 
-    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", "__stub__:request_scheduling_link");
+    // PR 7 wired the real executor: it returns the access-link interactive
+    // message (Evolution receives `fallbackText` when `interactiveMessages`
+    // is off in this test fixture).
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("agenda.example/acesso#token="));
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "portal_link" }));
     const rendered = renderPrometheusMetrics();
     expect(rendered).toMatch(/luna_routing_calls_total\{[^}]*outcome="success"[^}]*routing="llm"[^}]*\}/);
@@ -795,8 +807,9 @@ describe("incident-018 definitive WhatsApp routing", () => {
   });
 
   // PR 6: answer_plan from the LLM is mapped to `structured_answer` and the
-  // routing label is `llm`. The stub executor's placeholder is the only
-  // outbound payload (real templates land in PR 7+).
+  // routing label is `llm`. PR 7 wires the real executor, so the worker
+  // serves the `rede-unna` plan through the knowledge table and the LLM
+  // executor returns `verifiedPlanMessage` (not a stub placeholder).
   it("routes answer_plan via the LLM and emits structured_answer with routing=llm", async () => {
     resetMetricsForTests();
     const fetcher = vi.fn().mockResolvedValue(
@@ -811,8 +824,15 @@ describe("incident-018 definitive WhatsApp routing", () => {
     vi.stubGlobal("fetch", fetcher);
     const updates: Record<string, unknown>[] = [];
     const db = {
-      from: () => ({ update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) }),
-      rpc: vi.fn().mockResolvedValue({ data: true, error: null }),
+      from: (table: string) => {
+        if (table === "insurance_plans") return knowledgeTable(plans);
+        if (["insurance_aliases", "procedures", "procedure_coverage", "faq_entries"].includes(table)) return knowledgeTable();
+        return { update: (values: Record<string, unknown>) => ({ eq: vi.fn().mockImplementation(async () => { updates.push(values); return { error: null }; }) }) };
+      },
+      rpc: vi.fn().mockImplementation(async (name: string) => {
+        if (name === "read_whatsapp_conversation_slots") return { data: null, error: null };
+        return { data: true, error: null };
+      }),
     };
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
     const worker = new MessagingWorker(db as never, evolution as never, {
@@ -826,9 +846,9 @@ describe("incident-018 definitive WhatsApp routing", () => {
       llmRouting: "llm",
     } as never);
 
-    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000101", phone: "5513999999999", message_text: "Oi", attempts: 1 });
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000101", phone: "5513999999999", message_text: "Vocês aceitam Rede UNNA?", attempts: 1 });
 
-    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", "__stub__:answer_plan");
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", "A clínica atende o plano Rede UNNA.");
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "structured_answer" }));
     const rendered = renderPrometheusMetrics();
     expect(rendered).toMatch(/luna_routing_calls_total\{[^}]*outcome="success"[^}]*routing="llm"[^}]*\}/);
@@ -1149,5 +1169,41 @@ describe("incident-018 definitive WhatsApp routing", () => {
     expect(rendered).toMatch(/luna_routing_calls_total\{[^}]*outcome="api_key_missing"[^}]*routing="llm"[^}]*\}/);
     expect(rendered).not.toMatch(/luna_routing_calls_total\{[^}]*outcome="success"[^}]*\}/);
     vi.unstubAllGlobals();
+  });
+
+  it("answers plan queries that end or start with the plan name (boundary bug regression)", async () => {
+    // Reproduces the literal patient messages from the WhatsApp screenshots:
+    //   "Mas não atende SulAmérica?"  → "A clínica atende o plano SulAmérica."
+    //   "Aceita convênio Bradesco?"  → routed to answer_plan_list (the message
+    //   contains both "aceita" and "convenio" so it triggers asksForPlanList
+    //   and returns the full list — the previous behaviour was the generic
+    //   fallback, so the list reply is itself an upgrade from the bug).
+    // Both used to fall through to `knowledgeFallbackMessage` because
+    // `containsExactTerm` required spaces on both sides of the needle. The
+    // word-boundary regex now lets the plan name match at the start, end, or
+    // before punctuation of the patient message.
+    resetMetricsForTests();
+    const aliases = [{ alias: "Bradesco Dental", insurance_plan_id: "rede-unna" }];
+    const plansWithSulAmerica = [...plans, { id: "sulamerica", name: "SulAmérica", instructions: null }];
+    const db = { from: (table: string) => {
+      if (table === "whatsapp_plan_triage_sessions") return { select: () => ({ eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }) }) };
+      if (table === "insurance_plans") return knowledgeTable(plansWithSulAmerica);
+      if (table === "insurance_aliases") return knowledgeTable(aliases);
+      if (["procedures", "faq_entries"].includes(table)) return knowledgeTable();
+      if (table === "procedure_coverage") return { select: vi.fn().mockResolvedValue({ data: [], error: null }) };
+      return { update: () => ({ eq: vi.fn().mockResolvedValue({ error: null }) }) };
+    } };
+    const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: false, pollMs: 100, healthPort: 3001, allowedRecipients: ["5513991743380"] } as never);
+
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000200", phone: "5513991743380", message_text: "Mas não atende SulAmérica?", attempts: 1 });
+    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000201", phone: "5513991743380", message_text: "Aceita convênio Bradesco?", attempts: 1 });
+
+    expect(evolution.sendText).toHaveBeenCalledWith("5513991743380", "A clínica atende o plano SulAmérica.");
+    // Second message: "Aceita convênio Bradesco?" trips asksForPlanList and
+    // returns the canonical plan list. Crucially, it does NOT return the
+    // generic knowledgeFallbackMessage anymore.
+    expect(evolution.sendText).toHaveBeenCalledWith("5513991743380", expect.stringContaining("Os planos ativos são:"));
+    expect(evolution.sendText).not.toHaveBeenCalledWith("5513991743380", expect.stringContaining("Não localizei"));
   });
 });

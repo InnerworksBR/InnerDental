@@ -84,4 +84,46 @@ describe("verified facts", () => {
     }));
     expect(resolveVerifiedFacts("Atende criança também?", childKnowledge)).toEqual(expect.objectContaining({ facts: { childPolicy: childKnowledge.procedures[1] } }));
   });
+
+  it("matches a plan name when it appears at the end of the sentence before punctuation", () => {
+    // The print "Mas não atende SulAmérica?" used to fall through to the
+    // generic knowledge fallback because `containsExactTerm` required spaces
+    // on both sides of the needle; the word-boundary regex now handles it.
+    // We exercise Unimed/Amil here because the base fixture ships without
+    // SulAmérica; the E2E test in `whatsapp-routing-definitivo.test.ts`
+    // reproduces the original SulAmérica and Bradesco screenshots against
+    // a fixture that includes those plans.
+    expect(resolveVerifiedFacts("Mas não atende Unimed?", knowledge)).toEqual(expect.objectContaining({
+      kind: "resolved",
+      critical: true,
+      facts: expect.objectContaining({ plan: expect.objectContaining({ id: "unimed" }) }),
+    }));
+    expect(resolveVerifiedFacts("Vocês aceitam Amil?", knowledge)).toEqual(expect.objectContaining({
+      facts: expect.objectContaining({ plan: expect.objectContaining({ id: "amil" }) }),
+    }));
+    expect(resolveVerifiedFacts("Amil.", knowledge)).toEqual(expect.objectContaining({
+      facts: expect.objectContaining({ plan: expect.objectContaining({ id: "amil" }) }),
+    }));
+    expect(resolveVerifiedFacts("Unimed, vocês atendem?", knowledge)).toEqual(expect.objectContaining({
+      facts: expect.objectContaining({ plan: expect.objectContaining({ id: "unimed" }) }),
+    }));
+    // "Aceito Convênio Amil?" carries both "convenio" and "aceita" so it
+    // matches `asksForPlanList` and returns the full plan list — exactly the
+    // same upgrade-from-fallback behaviour as the Bradesco screenshot in the
+    // whatsapp-routing-definitivo E2E test. Crucially, it is no longer the
+    // generic `not_found` fallback.
+    expect(resolveVerifiedFacts("Aceito Convênio Amil?", knowledge)).toEqual(expect.objectContaining({
+      kind: "resolved",
+      critical: true,
+      facts: expect.objectContaining({ planList: expect.arrayContaining([expect.objectContaining({ id: "amil" })]) }),
+    }));
+  });
+
+  it("does not match plan names as substrings of unrelated words", () => {
+    // The word-boundary regex must keep the original safety: "particular"
+    // does not match "particularidade" and "unimed" does not match
+    // "desumimed" or "unimedacare".
+    expect(resolveVerifiedFacts("O caso tem uma particularidade clínica específica", knowledge)).toEqual({ kind: "not_found" });
+    expect(resolveVerifiedFacts("desumimed seria possível?", knowledge)).toEqual({ kind: "not_found" });
+  });
 });

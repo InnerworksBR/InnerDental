@@ -208,11 +208,11 @@ export const initialInsurancePromptMessage = "Qual é o seu plano odontológico?
 export function procedureInsurancePromptMessage(procedureName: string) {
   return `Sim, realizamos ${procedureName.toLocaleLowerCase("pt-BR")}. Qual é o seu plano odontológico?`;
 }
-export const unsupportedInsuranceMessage = "Esse plano não é atendido pela clínica.";
+export const unsupportedInsuranceMessage = "Esse plano não está na nossa lista de atendimento agora. Se quiser, posso conectar você com a equipe para confirmar — também é possível seguir como particular.";
 export const caixaInsuranceMessage = "Planos com “Caixa” no nome não são mais atendidos pela clínica.";
 export const ambiguousInsuranceMessage = "Encontrei mais de um plano com esse nome. Pode informar o nome completo que aparece na carteirinha?";
-export const priceConfirmationMessage = "Não encontrei um valor confirmado para informar com segurança. Vou pedir para a equipe confirmar.";
-export const knowledgeFallbackMessage = "Não encontrei essa informação com segurança. Vou pedir para a equipe confirmar.";
+export const priceConfirmationMessage = "Valores variam conforme o plano e o procedimento. Para te passar um número com segurança, vou puxar essa confirmação com a equipe. Posso seguir com isso?";
+export const knowledgeFallbackMessage = "Não localizei essa informação aqui agora, mas isso não significa que não exista — pode ter escapado das palavras que usei para buscar. Posso te conectar com a equipe, que confirma e volta rapidinho? Se preferir, descreva de outro jeito e eu tento de novo.";
 export const procedurePromptMessage = "Qual procedimento você gostaria de consultar?";
 
 export function verifiedPlanMessage(plan: { id: string; name: string; instructions: string | null }) {
@@ -233,8 +233,8 @@ export function verifiedProcedureListMessage(procedures: Array<{ name: string }>
 
 export function verifiedCoverageMessage(input: { planName: string; procedureName: string; status: "accepted" | "not_covered" | "not_found"; instructions: string | null }) {
   if (input.status === "accepted") return `Para o plano ${input.planName}, ${input.procedureName} está cadastrado como coberto.${input.instructions ? ` ${input.instructions}` : ""}`;
-  if (input.status === "not_covered") return `Para o plano ${input.planName}, ${input.procedureName} não está cadastrado como coberto.${input.instructions ? ` ${input.instructions}` : " Vou pedir para a equipe confirmar as opções."}`;
-  return `Não encontrei uma cobertura cadastrada para ${input.procedureName} no plano ${input.planName}. Vou pedir para a equipe confirmar.`;
+  if (input.status === "not_covered") return `Para o plano ${input.planName}, ${input.procedureName} não está cadastrado como coberto.${input.instructions ? ` ${input.instructions}` : " Posso puxar essa confirmação com a equipe, se quiser."}`;
+  return `Não localizei uma cobertura cadastrada para ${input.procedureName} no plano ${input.planName}. Posso conectar você com a equipe para confirmar?`;
 }
 
 export const unsupportedMediaInteractiveMessage: InteractiveMessage = {

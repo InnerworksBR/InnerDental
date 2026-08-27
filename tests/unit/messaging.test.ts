@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { classifyIntent, isAccessLinkRequest, isAppointmentStatusRequest, isClinicalQuestion, isExplicitHumanRequest, isGreetingMessage, isProcedureBookingRequest, isTreatmentStatusRequest } from "@/domain/messaging/intent.legacy";
 import { whatsappMessageFingerprint } from "@/domain/messaging/fingerprint";
-import { appointmentConfirmationRequestInteractiveMessage, appointmentMessage, caixaInsuranceMessage, dailyConfirmationSummaryMessage, isAutomatedReplyEcho, knowledgeAnswerInteractiveMessage, menuActions, otpMessage, unsupportedInsuranceMessage } from "@/domain/messaging/templates";
+import { appointmentConfirmationRequestInteractiveMessage, appointmentMessage, caixaInsuranceMessage, dailyConfirmationSummaryMessage, isAutomatedReplyEcho, knowledgeAnswerInteractiveMessage, knowledgeFallbackMessage, menuActions, otpMessage, priceConfirmationMessage, unsupportedInsuranceMessage } from "@/domain/messaging/templates";
 import { assertInsurancePlanCatalog, findRequestedProcedure, findStructuredAnswer, triageInsurancePlan } from "@/domain/knowledge/service";
 import { encryptOtp, decryptOtp } from "@/lib/messaging/otp-cipher";
 import { signEvolutionPayload, verifyEvolutionApiKey, verifyEvolutionSignature } from "@/integrations/evolution/signature";
@@ -116,8 +116,22 @@ describe("messaging", () => {
   });
   it("uses professional plan responses without naming a professional or forcing a generic CTA", () => {
     expect(`${unsupportedInsuranceMessage} ${caixaInsuranceMessage}`).not.toMatch(/tarc[ií]lia/i);
-    expect(unsupportedInsuranceMessage).toContain("clínica");
+    expect(unsupportedInsuranceMessage).toContain("equipe");
+    expect(unsupportedInsuranceMessage).toContain("particular");
     expect(knowledgeAnswerInteractiveMessage("A clínica fica no Centro.").fallbackText).toBe("A clínica fica no Centro.");
+  });
+  it("rewrites the knowledge fallback as an empathetic escape hatch, not a dead-end", () => {
+    // Locks the new microcopy contract: stays under the 300-char schema
+    // ceiling, names the limitation without apologising, and offers two
+    // explicit exits (human handoff + retry). This is what the WhatsApp
+    // screenshots used to display when a plan question slipped past the
+    // regex cascade.
+    expect(knowledgeFallbackMessage.length).toBeLessThanOrEqual(300);
+    expect(knowledgeFallbackMessage).toMatch(/equipe/i);
+    expect(knowledgeFallbackMessage).toMatch(/tentar|descreva|tent/i);
+    expect(knowledgeFallbackMessage).not.toMatch(/Vou pedir para a equipe confirmar/);
+    expect(priceConfirmationMessage).toMatch(/equipe/);
+    expect(priceConfirmationMessage).toMatch(/\?$/);
   });
   it("encrypts OTP at rest and rejects a wrong key", () => { const secret = "a".repeat(32), encrypted = encryptOtp("123456", secret); expect(encrypted).not.toContain("123456"); expect(decryptOtp(encrypted, secret)).toBe("123456"); expect(() => decryptOtp(encrypted, "b".repeat(32))).toThrow(); });
   it("separates inbound messages from fromMe activity", () => { const inbound = evolutionWebhookSchema.parse({ event: "messages.upsert", apikey: "evo-key", data: { key: { id: "evt-1", remoteJid: "5513999999999@s.whatsapp.net", fromMe: false }, message: { conversation: "Olá" } } }); expect(normalizeIncomingMessage(inbound)).toEqual({ externalId: "evt-1", phone: "5513999999999", text: "Olá" }); expect(normalizeFromMeActivity(inbound)).toBeNull(); const outbound = evolutionWebhookSchema.parse({ event: "messages.upsert", apikey: "evo-key", data: { key: { id: "evt-2", remoteJid: "5513999999999@s.whatsapp.net", fromMe: true }, message: { conversation: "Resposta da doutora" } } }); expect(normalizeIncomingMessage(outbound)).toBeNull(); expect(normalizeFromMeActivity(outbound)).toEqual({ externalId: "evt-2", phone: "5513999999999", text: "Resposta da doutora" }); });
@@ -566,7 +580,7 @@ describe("messaging", () => {
     const worker = new MessagingWorker(db as never, evolution as never, { pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000013", phone: "5513999999999", message_text: "Qual é o endereço?", attempts: 1 });
     expect(rpc).toHaveBeenCalledWith("enqueue_human_handoff", expect.objectContaining({ p_phone: "5513999999999" }));
-    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/equipe.*confirmar/i));
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/equipe/i));
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "handoff" }));
   });
   it("asks for clarification instead of choosing an ambiguous insurance plan", async () => {
@@ -596,7 +610,7 @@ describe("messaging", () => {
     const evolution = { sendText: vi.fn().mockResolvedValue(undefined) };
     const worker = new MessagingWorker(db as never, evolution as never, { pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
     await worker.processInbox({ id: "00000000-0000-4000-8000-000000000017", phone: "5513999999999", message_text: "Quanto custa uma limpeza?", attempts: 1 });
-    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/valor confirmado.*equipe/i));
+    expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringMatching(/equipe/i));
     expect(rpc).toHaveBeenCalledWith("enqueue_human_handoff", expect.objectContaining({ p_phone: "5513999999999" }));
     expect(updates).toContainEqual(expect.objectContaining({ processed_action: "handoff" }));
   });

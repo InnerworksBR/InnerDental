@@ -17,9 +17,11 @@ export function normalizeKnowledgeTerm(value: string) {
 }
 
 function containsExactTerm(message: string, term: string) {
-  const text = ` ${normalizeKnowledgeTerm(message)} `;
-  const needle = ` ${normalizeKnowledgeTerm(term)} `;
-  return needle.length > 2 && text.includes(needle);
+  const text = normalizeKnowledgeTerm(message);
+  const needle = normalizeKnowledgeTerm(term);
+  if (needle.length <= 2) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(text);
 }
 
 export type InsurancePlanTriageResult =
