@@ -175,3 +175,36 @@ export async function listAdminProfessionals() {
   if (error) throw new Error("ADMIN_PROFESSIONALS_READ_FAILED");
   return (data ?? []).map((professional) => ({ id: professional.id, name: professional.name }));
 }
+
+export async function listAdminActivitySince(since: string, limit = 100) {
+  const client = createSupabaseAdminClient();
+  const [inbox, outbox, incidents] = await Promise.all([
+    client.from("whatsapp_inbox").select("id,phone,status,classified_intent,processed_action,last_error,dead_lettered_at,attempts,created_at,processed_at").gt("created_at", since).order("created_at", { ascending: false }).limit(limit),
+    client.from("notification_outbox").select("id,aggregate_type,aggregate_id,event_type,status,attempts,last_error,dead_lettered_at,created_at,sent_at").gt("created_at", since).order("created_at", { ascending: false }).limit(limit),
+    client.from("operational_incidents").select("id,category,status,summary,correlation_id,opened_at,resolved_at").eq("status", "open").gt("opened_at", since).order("opened_at", { ascending: false }).limit(limit),
+  ]);
+  if (inbox.error || outbox.error || incidents.error) throw new Error("ADMIN_ACTIVITY_DELTA_READ_FAILED");
+  return {
+    inbox: (inbox.data as InboxRow[] ?? []).map((entry) => ({ ...entry, phone: maskPhone(entry.phone), status: entry.dead_lettered_at ? "dead-letter" : entry.status, processed_action: entry.dead_lettered_at ? null : entry.processed_action })),
+    outbox: (outbox.data as OutboxRow[] ?? []).map((entry) => ({ ...entry, status: entry.dead_lettered_at ? "dead-letter" : entry.status })),
+    incidents: (incidents.data ?? []).map((entry: { id: string; category: string; status: string; summary: string; correlation_id: string | null; opened_at: string; resolved_at: string | null }) => ({
+      id: entry.id,
+      category: entry.category,
+      status: entry.status,
+      summary: entry.summary,
+      correlationId: entry.correlation_id,
+      openedAt: entry.opened_at,
+      resolvedAt: entry.resolved_at,
+    })),
+  };
+}
+
+export async function listAdminAgendaMonth(anchor: string) {
+  const monthStart = new Date(`${anchor}T12:00:00-03:00`);
+  monthStart.setUTCDate(1);
+  const start = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(monthStart);
+  monthStart.setUTCMonth(monthStart.getUTCMonth() + 1);
+  monthStart.setUTCDate(0);
+  const end = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(monthStart);
+  return listAdminAgendaRange(start, end);
+}

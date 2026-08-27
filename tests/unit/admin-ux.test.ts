@@ -33,11 +33,37 @@ describe("internal portal UX shell", () => {
     expect(blockFormSource).toContain("router.refresh()");
   });
 
-  it("keeps week days independently collapsible and opens today by default", () => {
-    expect(consoleSource).toContain('<details className={`ops-card ops-week-day');
-    expect(consoleSource).toContain("open={expandedWeekDays.has(weekDate)}");
-    expect(consoleSource).toContain("onToggle={(event)");
-    expect(consoleSource).toContain('summary className="ops-week-day-header"');
-    expect(consoleSource).toContain('className="ops-week-day-content"');
+  it("renders the redesigned calendar with month/week/day views and an accessible toolbar", () => {
+    const toolbarSource = readFileSync("src/components/admin/calendar/toolbar.tsx", "utf8");
+    const monthSource = readFileSync("src/components/admin/calendar/month-view.tsx", "utf8");
+    expect(toolbarSource).toContain('className="cal-toolbar"');
+    expect(toolbarSource).toContain('role="tablist"');
+    expect(monthSource).toContain("cal-month__grid");
+    expect(styles).toContain(".cal-month__cell--today");
+    expect(styles).toContain(".cal-week__hours");
+  });
+
+  it("shows live polling indicator and clipboard export on the messages tab", () => {
+    const mensagensSource = readFileSync("src/components/admin/tabs/mensagens-tab.tsx", "utf8");
+    const kpiSource = readFileSync("src/components/admin/conversation-analysis/kpi-card.tsx", "utf8");
+    expect(mensagensSource).toContain("live-pulse");
+    expect(kpiSource).toContain("conv-kpi__export");
+    expect(styles).toContain(".live-pulse__dot");
+    expect(styles).toContain("@keyframes live-pulse-anim");
+  });
+
+  it("keeps block form intact: in-context review step and router.refresh after success", () => {
+    expect(blockFormSource).not.toContain("window.confirm");
+    expect(blockFormSource).not.toMatch(/[^.]confirm\(/);
+    expect(blockFormSource).toContain("Revisar bloqueio");
+    expect(blockFormSource).toContain("Confirmar bloqueio?");
+    expect(blockFormSource).toContain("router.refresh()");
+  });
+
+  it("exposes inline incident notes with textarea and resolve action", () => {
+    const incidentsSource = readFileSync("src/components/admin-incidents.tsx", "utf8");
+    expect(incidentsSource).toContain("ops-incident-notes");
+    expect(styles).toContain(".ops-incident-notes textarea");
+    expect(styles).toContain(".ops-incident-notes ul");
   });
 });
