@@ -5,7 +5,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { EvolutionClient } from "../src/integrations/evolution/client.ts";
 import { decryptOtp, encryptOtp } from "../src/lib/messaging/otp-cipher.ts";
 import { classifyIntent, isAccessLinkRequest, isExplicitHumanRequest, isPaymentQuestion, isProcedureBookingRequest, type MessageIntent } from "../src/domain/messaging/intent.legacy.ts";
-import { EMPTY_SLOTS } from "../src/domain/messaging/slots.ts";
+import { EMPTY_SLOTS, type ConversationSlots } from "../src/domain/messaging/slots.ts";
 import { whatsappMessageFingerprint } from "../src/domain/messaging/fingerprint.ts";
 import { handoffNotificationMessage, handoffReason } from "../src/domain/messaging/handoff.ts";
 import {
@@ -163,6 +163,8 @@ type RouterResult =
       tokensIn: number;
       tokensOut: number;
       latencyMs: number;
+      slotWrites?: Partial<ConversationSlots>;
+      inboxAccessLink?: PreparedInboxAccessLink;
     }
   | { kind: "regex_fallback"; reason: RouterFallbackReason; routing: "regex" };
 type Config = {
@@ -595,15 +597,14 @@ export class MessagingWorker {
     }
     return { kind: "reply", message: prompt, action: "plan_requested" };
   }
-  private async acceptPlanTriage(phone: string, planId: string, promptedByInboxId: string, answerInboxId: string) {
+  private async acceptPlanTriage(phone: string, planId: string, promptedByInboxId: string) {
     // The RPC writes the patient profile and accepted triage session in one
-    // database transaction. Sending a portal link after two independent
-    // upserts could otherwise strand a patient in an accepted session.
+    // database transaction. Migration 026 dropped the `p_answer_inbox_id`
+    // parameter (the audit trail is captured by `prompted_by_inbox_id`).
     const { data, error } = await this.db.rpc("accept_whatsapp_plan_triage", {
       p_phone: phone,
       p_insurance_plan_id: planId,
       p_prompted_by_inbox_id: promptedByInboxId,
-      p_answer_inbox_id: answerInboxId,
     });
     if (error || data !== true) throw new Error("PLAN_TRIAGE_ACCEPTANCE_FAILED");
   }
@@ -974,9 +975,10 @@ export class MessagingWorker {
       return fallback("budget_exceeded");
     }
     const recentTurns = await this.loadConversationContext(input.row.phone, input.row.id);
+    const persistedSlots = await this.readConversationSlots(input.row.phone);
     const context: RoutingContext = {
       phone: input.row.phone,
-      slots: { ...EMPTY_SLOTS },
+      slots: persistedSlots.slots,
       recent_turns: recentTurns,
       knowledge: input.knowledge ?? { plans: [], aliases: [], procedures: [], coverage: [], faqs: [] },
     };
@@ -1022,7 +1024,7 @@ export class MessagingWorker {
       log("warn", "routing_skipped", { correlationId: input.row.id, reason: "empty_decision" });
       return fallback("empty_decision");
     }
-    let executorResult: { reply: string | InteractiveMessage; handoff?: boolean } = { reply: `__stub__:${firstCall.name}` };
+    let executorResult: { reply: string | InteractiveMessage; handoff?: boolean; slotWrites?: Partial<{ awaiting_plan?: boolean; awaiting_procedure?: boolean; awaiting_window?: boolean; prompted_by_inbox_id?: string; plan_id?: string; procedure_id?: string; schedule_window?: { preferred?: string; earliest?: string; latest?: string }; last_tool?: string; updated_at?: string }>; inboxAccessLink?: { url: string; sourceInboxId: string; sentAt: string | null } } = { reply: `__stub__:${firstCall.name}` };
     try {
       executorResult = await executeRouterTool(firstCall.name, firstCall.arguments ?? {}, {
         phone: input.row.phone,
@@ -1031,6 +1033,8 @@ export class MessagingWorker {
         evolution: this.evolution,
         knowledge: context.knowledge,
         slots: context.slots,
+        otpSecret: this.config.otpSecret,
+        portalBaseUrl: this.config.portalBaseUrl,
       });
     } catch (error) {
       log("error", "routing_tool_failed", { correlationId: input.row.id, tool: firstCall.name, error });
@@ -1054,6 +1058,8 @@ export class MessagingWorker {
       tokensIn: result.tokensIn,
       tokensOut: result.tokensOut,
       latencyMs: result.latencyMs,
+      slotWrites: executorResult.slotWrites,
+      inboxAccessLink: executorResult.inboxAccessLink,
     };
   }
   async processInbox(row: InboxRow) {
@@ -1101,7 +1107,7 @@ export class MessagingWorker {
         // Exact replay is intentionally sent through the same RPC: it locks
         // and revalidates the accepted patient profile and active plan before
         // the worker can recreate a portal response.
-        await this.acceptPlanTriage(row.phone, acceptedPlan!.id, acceptedPlan!.promptedByInboxId, row.id);
+        await this.acceptPlanTriage(row.phone, acceptedPlan!.id, acceptedPlan!.promptedByInboxId);
       }
       const knowledge: KnowledgeData | undefined = ["insurance", "procedure", "faq", "conversation"].includes(intent)
         ? await this.loadKnowledge()
@@ -1136,6 +1142,15 @@ export class MessagingWorker {
           groundingResult = "not_used";
           routing = "llm";
           routingTool = routerResult.routingTool;
+          // Persist slot writes produced by the executor (e.g. ask_plan,
+          // ask_procedure) before sending the reply so the next inbound row
+          // already sees the updated state.
+          if (routerResult.slotWrites) {
+            await this.applyConversationSlotWrites(row.phone, routerResult.slotWrites, row.id);
+          }
+          if (routerResult.inboxAccessLink) {
+            preparedInboxLink = routerResult.inboxAccessLink;
+          }
         } else {
           const regexResult = await this.runRegexCascade({
             row, intent, messageText, knowledge, verifiedFacts, selectedPlanId,
@@ -1181,6 +1196,7 @@ export class MessagingWorker {
       }
       if (await this.ignoreIfConversationPaused(row, intent)) return;
       if (handoff) {
+        await this.clearConversationSlots(row.phone);
         const { data: handoffId, error } = await this.db.rpc("enqueue_human_handoff", { p_inbox_id: row.id, p_phone: row.phone, p_reason: handoffReason(messageText) });
         if (error || !handoffId) throw new Error("HANDOFF_ENQUEUE_FAILED");
       }
@@ -1242,6 +1258,37 @@ export class MessagingWorker {
     if (error || data !== true) throw new Error("ACCESS_LINK_DELIVERY_FINALIZE_FAILED");
   }
   private async loadKnowledge(): Promise<KnowledgeData> { const [plans, aliases, procedures, coverage, faqs] = await Promise.all([this.db.from("insurance_plans").select("id,name,instructions").eq("active", true), this.db.from("insurance_aliases").select("alias,insurance_plan_id").eq("active", true), this.db.from("procedures").select("id,name,description,online_booking").eq("active", true), this.db.from("procedure_coverage").select("procedure_id,insurance_plan_id,accepted,instructions"), this.db.from("faq_entries").select("category,question,answer").eq("active", true)]); if (plans.error || aliases.error || procedures.error || coverage.error || faqs.error) throw new Error("KNOWLEDGE_FAILED"); const knowledge = { plans: plans.data ?? [], aliases: aliases.data ?? [], procedures: procedures.data ?? [], coverage: coverage.data ?? [], faqs: faqs.data ?? [] }; return knowledge; }
+  private async readConversationSlots(phone: string): Promise<{ slots: ConversationSlots; sourceInboxId: string | null }> {
+    // `read_whatsapp_conversation_slots` returns the persisted slots JSONB
+    // or `null` if the row has expired. The caller treats both as "no
+    // active state" by defaulting to `EMPTY_SLOTS`.
+    const { data, error } = await this.db.rpc("read_whatsapp_conversation_slots", { p_phone: phone });
+    if (error) {
+      log("warn", "slot_read_failed", { correlationId: phone, error });
+      return { slots: { ...EMPTY_SLOTS }, sourceInboxId: null };
+    }
+    const row = data as { slots?: unknown; prompted_by_inbox_id?: unknown } | null;
+    const rawSlots = (row?.slots ?? {}) as Record<string, unknown>;
+    return {
+      slots: { ...EMPTY_SLOTS, ...(rawSlots as Partial<ConversationSlots>) },
+      sourceInboxId: typeof row?.prompted_by_inbox_id === "string" ? row.prompted_by_inbox_id : null,
+    };
+  }
+  private async applyConversationSlotWrites(phone: string, slotWrites: Partial<ConversationSlots>, promptedByInboxId: string) {
+    const { error } = await this.db.rpc("apply_whatsapp_conversation_slots", {
+      p_phone: phone,
+      p_slots: slotWrites,
+      p_prompt_inbox_id: promptedByInboxId,
+    });
+    if (error) throw new Error("SLOT_APPLY_FAILED");
+  }
+  private async clearConversationSlots(phone: string) {
+    // The RPC is idempotent — returns `false` if no row existed, `true` if
+    // a row was deleted. We do not fail the inbox on a clear error: the
+    // handoff enqueue is the source of truth for "human took over".
+    const { error } = await this.db.rpc("clear_whatsapp_conversation_slots", { p_phone: phone });
+    if (error) log("warn", "slot_clear_failed", { correlationId: phone, error });
+  }
   async run() { log("info", "worker_started", { workerId: this.config.workerId, pollMs: this.config.pollMs, healthPort: this.config.healthPort, concurrency: this.config.concurrency, leaseSeconds: this.config.leaseSeconds, recipientPolicy: this.config.recipientPolicy, allowedRecipientCount: this.config.allowedRecipients?.length ?? 0, interactiveMessages: this.config.interactiveMessages, dailySummaryHour: this.config.dailySummaryHour ?? 8, calendarSyncIntervalMs: this.config.calendarSyncIntervalMs, calendarSyncEnabled: Boolean(this.calendarAuth), openaiEnabled: Boolean(this.config.openaiApiKey) }); while (!this.stopped) { try { await this.tick(); } catch (error) { this.lastPoll = 0; incrementCounter("luna_worker_failures_total", "Worker processing failures.", { queue: "poll" }); log("error", "worker_poll_failed", { pollNumber: this.pollNumber, error }); } await new Promise((resolve) => setTimeout(resolve, this.config.pollMs)); } log("info", "worker_stopped", { pollsCompleted: this.pollNumber }); }
   stop() { if (!this.stopped) log("info", "worker_shutdown_requested", { pollsCompleted: this.pollNumber }); this.stopped = true; }
   healthy() { return !this.stopped && Date.now() - this.lastPoll < Math.max(this.config.pollMs * 5, 10_000); }
