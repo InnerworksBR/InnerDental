@@ -66,7 +66,7 @@ export type AggregatedAnalysis = {
 export type AnalysisLog = {
   id: string;
   conversation_key: string;
-  window: AnalysisWindow;
+  range_window: AnalysisWindow;
   outcome: "success" | "confused" | "abandoned" | "error" | "handoff_needed" | "spam";
   confidence: number;
   summary: string;

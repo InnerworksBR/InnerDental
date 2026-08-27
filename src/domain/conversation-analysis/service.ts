@@ -28,7 +28,7 @@ export type AnalyzeInput = {
 export type AnalysisLog = {
   id: string;
   conversation_key: string;
-  window: Window;
+  range_window: Window;
   outcome: Outcome;
   confidence: number;
   summary: string;
@@ -75,7 +75,7 @@ export async function analyzeConversation(input: AnalyzeInput): Promise<{ log: A
     .from("conversation_analysis_logs")
     .insert({
       conversation_key: key,
-      window: input.window,
+      range_window: input.window,
       outcome: classification.outcome,
       confidence: classification.confidence,
       summary: classification.summary,
@@ -86,7 +86,7 @@ export async function analyzeConversation(input: AnalyzeInput): Promise<{ log: A
       completion_tokens: classification.usage.completionTokens,
       analyzed_by: input.actorId ?? null,
     })
-    .select("id,conversation_key,window,outcome,confidence,summary,evidence,correlation_ids,model,prompt_tokens,completion_tokens,analyzed_at,resolved,resolved_at")
+    .select("id,conversation_key,range_window,outcome,confidence,summary,evidence,correlation_ids,model,prompt_tokens,completion_tokens,analyzed_at,resolved,resolved_at")
     .single();
   if (error || !data) throw new Error("ANALYSIS_PERSIST_FAILED");
   return { log: data as AnalysisLog, classification };
@@ -94,32 +94,48 @@ export async function analyzeConversation(input: AnalyzeInput): Promise<{ log: A
 
 const WINDOW_HOURS: Record<Window, number> = { "24h": 24, "7d": 24 * 7, "30d": 24 * 30 };
 
+function emptyAggregated(window: Window): AggregatedAnalysis {
+  return {
+    window,
+    total: 0,
+    problematic: 0,
+    percentage: 0,
+    byOutcome: {
+      success: 0,
+      confused: 0,
+      abandoned: 0,
+      error: 0,
+      handoff_needed: 0,
+      spam: 0,
+    },
+    topProblematic: [],
+  };
+}
+
 export async function getRecentAnalysis(window: Window): Promise<AggregatedAnalysis> {
   const client = createSupabaseAdminClient();
   const hours = WINDOW_HOURS[window];
   const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
 
-  const { data: rows, error } = await client
-    .from("conversation_analysis_logs")
-    .select("id,conversation_key,window,outcome,confidence,summary,evidence,correlation_ids,model,prompt_tokens,completion_tokens,analyzed_at,resolved,resolved_at")
-    .gte("analyzed_at", sinceIso)
-    .order("analyzed_at", { ascending: false })
-    .limit(500);
-  if (error) throw new Error("ANALYSIS_READ_FAILED");
-  const list = (rows ?? []) as AnalysisLog[];
-  const total = list.length;
-  const byOutcome = {
-    success: 0,
-    confused: 0,
-    abandoned: 0,
-    error: 0,
-    handoff_needed: 0,
-    spam: 0,
-  } satisfies Record<Outcome, number>;
-  for (const row of list) byOutcome[row.outcome] += 1;
+  let rows: AnalysisLog[] = [];
+  try {
+    const { data, error } = await client
+      .from("conversation_analysis_logs")
+      .select("id,conversation_key,range_window,outcome,confidence,summary,evidence,correlation_ids,model,prompt_tokens,completion_tokens,analyzed_at,resolved,resolved_at")
+      .gte("analyzed_at", sinceIso)
+      .order("analyzed_at", { ascending: false })
+      .limit(500);
+    if (error) return emptyAggregated(window);
+    rows = (data ?? []) as AnalysisLog[];
+  } catch {
+    return emptyAggregated(window);
+  }
+  const total = rows.length;
+  const byOutcome = emptyAggregated(window).byOutcome;
+  for (const row of rows) byOutcome[row.outcome] += 1;
   const problematic = total - byOutcome.success;
   const percentage = total === 0 ? 0 : (problematic / total) * 100;
-  const topProblematic = list.filter((row) => row.outcome !== "success").slice(0, 25);
+  const topProblematic = rows.filter((row) => row.outcome !== "success").slice(0, 25);
   return { window, total, problematic, percentage, byOutcome, topProblematic };
 }
 

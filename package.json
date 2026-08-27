@@ -16,7 +16,7 @@
     "test": "vitest run",
     "test:database:whatsapp": "node tests/database/run-whatsapp-routing-definitivo.mjs",
     "test:e2e": "playwright test",
-    "worker:check": "node -e \"import('./worker/index.ts')\"",
+    "worker:check": "tsx --eval \"import('./worker/index.ts')\"",
     "security:scan": "node scripts/scan-secrets.mjs",
     "config:verify": "node scripts/verify-runtime-config.mjs",
     "smoke:deployment": "node scripts/smoke-deployment.mjs",
@@ -24,7 +24,7 @@
     "migrations:check": "node scripts/check-migrations.mjs",
     "release:manifest": "node scripts/create-release-manifest.mjs",
     "test:load": "node scripts/load-availability.mjs",
-    "worker": "node --env-file-if-exists=.env --env-file-if-exists=.env.local worker/index.ts"
+    "worker": "tsx --env-file-if-exists=.env --env-file-if-exists=.env.local worker/index.ts"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.3",
@@ -47,6 +47,7 @@
     "eslint": "9.39.5",
     "eslint-config-next": "16.2.11",
     "tailwindcss": "4.3.3",
+    "tsx": "^4.23.12",
     "typescript": "5.9.3",
     "vitest": "4.1.10"
   }

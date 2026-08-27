@@ -21,7 +21,7 @@ end $$;
 create table if not exists public.conversation_analysis_logs (
   id uuid primary key default gen_random_uuid(),
   conversation_key text not null,
-  window public.conversation_analysis_window not null,
+  range_window public.conversation_analysis_window not null,
   outcome public.conversation_outcome not null,
   confidence numeric(3, 2) not null check (confidence between 0 and 1),
   summary text not null check (char_length(summary) between 1 and 500),
@@ -37,10 +37,10 @@ create table if not exists public.conversation_analysis_logs (
 );
 
 create index if not exists conversation_analysis_logs_window_idx
-  on public.conversation_analysis_logs (window, analyzed_at desc);
+  on public.conversation_analysis_logs (range_window, analyzed_at desc);
 
 create index if not exists conversation_analysis_logs_outcome_idx
-  on public.conversation_analysis_logs (window, outcome, analyzed_at desc);
+  on public.conversation_analysis_logs (range_window, outcome, analyzed_at desc);
 
 create index if not exists conversation_analysis_logs_unresolved_idx
   on public.conversation_analysis_logs (resolved, outcome)
