@@ -174,6 +174,10 @@ type Config = {
   openaiRoutingTimeoutMs?: number;
   openaiRoutingMaxRetries?: number;
   openaiRoutingDailyTokenBudget?: number;
+  /** true → usa o novo orquestrador; false → fluxo antigo (routeWithTools) */
+  useNewFlow: boolean;
+  /** true → fluxo novo roda em paralelo sem enviar, compara com antigo e loga divergências */
+  shadowNewFlow: boolean;
 };
 
 const WHATSAPP_ACCESS_LINK_TTL_MS = 24 * 60 * 60_000;
@@ -274,6 +278,8 @@ export function loadWorkerConfig(): Config {
   if (!Number.isInteger(openaiRoutingTimeoutMs) || openaiRoutingTimeoutMs < 250 || openaiRoutingTimeoutMs > 12000) throw new Error("OPENAI_ROUTING_TIMEOUT_MS_INVALID");
   if (!Number.isInteger(openaiRoutingMaxRetries) || openaiRoutingMaxRetries < 0 || openaiRoutingMaxRetries > 3) throw new Error("OPENAI_ROUTING_MAX_RETRIES_INVALID");
   if (!Number.isInteger(openaiRoutingDailyTokenBudget) || openaiRoutingDailyTokenBudget <= 0) throw new Error("OPENAI_ROUTING_DAILY_TOKEN_BUDGET_INVALID");
+  const useNewFlow = booleanSetting("LUNA_USE_NEW_FLOW", false);
+  const shadowNewFlow = booleanSetting("LUNA_SHADOW_NEW_FLOW", false);
   return {
     supabaseUrl: required("NEXT_PUBLIC_SUPABASE_URL"), supabaseKey: required("SUPABASE_SECRET_KEY"), evolutionBaseUrl: required("EVOLUTION_BASE_URL"), evolutionApiKey: required("EVOLUTION_API_KEY"), evolutionInstance: required("EVOLUTION_INSTANCE"), otpSecret, portalBaseUrl: portal.toString().replace(/\/$/, ""), handoffNotificationPhone, dailySummaryHour, googleCredentials, googleCalendarId: process.env.GOOGLE_CALENDAR_ID?.trim() || undefined, calendarSyncIntervalMs,
     openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined, openaiModel: process.env.OPENAI_CHAT_MODEL?.trim() || "gpt-4o-mini",
@@ -283,6 +289,8 @@ export function loadWorkerConfig(): Config {
     openaiRoutingTimeoutMs,
     openaiRoutingMaxRetries,
     openaiRoutingDailyTokenBudget,
+    useNewFlow,
+    shadowNewFlow,
   };
 }
 const opaqueToken = () => randomBytes(32).toString("base64url");
@@ -320,6 +328,8 @@ export class MessagingWorker {
       openaiRoutingTimeoutMs: config.openaiRoutingTimeoutMs ?? 4000,
       openaiRoutingMaxRetries: config.openaiRoutingMaxRetries ?? 1,
       openaiRoutingDailyTokenBudget: config.openaiRoutingDailyTokenBudget ?? 200000,
+      useNewFlow: config.useNewFlow ?? false,
+      shadowNewFlow: config.shadowNewFlow ?? false,
     };
     this.calendarAuth = config.googleCredentials ? new GoogleServiceAccountAuth(config.googleCredentials) : undefined;
   }
