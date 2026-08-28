@@ -622,6 +622,31 @@ export class MessagingWorker {
     });
     if (error || data !== true) throw new Error("PLAN_TRIAGE_ACCEPTANCE_FAILED");
   }
+  /**
+   * Contexto de conversa formatado para o parser do novo fluxo.
+   * Retorna { role, text }[] — não reutiliza loadConversationContext que retorna { intent, action }[].
+   */
+  private async loadNewFlowConversationContext(phone: string, currentId: string) {
+    try {
+      const { data, error } = await this.db.from("whatsapp_inbox")
+        .select("message_text,processed_action")
+        .eq("phone", phone)
+        .neq("id", currentId)
+        .gte("created_at", new Date(Date.now() - 30 * 60_000).toISOString())
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (error) return [];
+      return ((data ?? []) as Array<{ message_text: string | null; processed_action: string | null }>)
+        .reverse()
+        .map((entry) => ({
+          role: ((entry.processed_action ?? "").startsWith("luna") ? "luna" : "patient") as "patient" | "luna",
+          text: entry.message_text ?? "",
+        }));
+    } catch {
+      return [];
+    }
+  }
+
   private async ignoreIfConversationPaused(row: InboxRow, intent: MessageIntent) {
     if (!this.config.humanTakeoverPauseMinutes) return false;
     const { data, error } = await this.db.rpc("is_whatsapp_conversation_paused", { p_phone: row.phone });
@@ -930,6 +955,151 @@ export class MessagingWorker {
       { regex_tool: regexTool, llm_tool: llmTool },
     );
   }
+
+  // ─── Execução de operações do novo fluxo ─────────────────────────────────────
+
+  /**
+   * Executa a lista de WorkerOperations retornadas pelo novo fluxo.
+   * Cada operação é aplicada na ordem: persistência de estado, envio de
+   * mensagens, handoff, etc.
+   */
+  private async executeNewFlowOperations(
+    row: InboxRow,
+    operations: WorkerOperation[],
+    result: OrchestrateResult,
+  ): Promise<void> {
+    for (const op of operations) {
+      switch (op.type) {
+        case "send_text": {
+          await this.sendBotText(row.phone, op.text);
+          if (op.persist) {
+            await this.applyNewQualificationState(row.phone, op.persist, row.id);
+          }
+          break;
+        }
+        case "send_interactive": {
+          await this.sendReply(row.phone, op.message);
+          if (op.persist) {
+            await this.applyNewQualificationState(row.phone, op.persist, row.id);
+          }
+          break;
+        }
+        case "handoff_qualified":
+        case "handoff_urgent":
+        case "handoff_requested": {
+          // Persiste estado antes de limpar
+          await this.applyNewQualificationState(row.phone, { awaiting_slot: null }, row.id);
+          // Notifica doutora via outbox
+          const { data: handoffId, error: handoffError } = await this.db.rpc("enqueue_human_handoff", {
+            p_inbox_id: row.id,
+            p_phone: row.phone,
+            p_reason: op.audit.reason,
+          });
+          if (handoffError || !handoffId) {
+            throw new Error("HANDOFF_ENQUEUE_FAILED");
+          }
+          // Envia ack pro paciente
+          await this.sendBotText(row.phone, op.patientAck);
+          // Log estruturado
+          log("info", "new_flow_handoff_executed", {
+            correlationId: row.id,
+            phone: row.phone,
+            handoffType: op.type,
+            audit: op.audit,
+            summary: op.summary,
+          });
+          break;
+        }
+        case "no_op": {
+          log("debug", "new_flow_noop", {
+            correlationId: row.id,
+            reason: op.audit.reason,
+          });
+          break;
+        }
+      }
+    }
+  }
+
+  /**
+   * Modo shadow: executa novo fluxo em paralelo, compara resultado com o antigo,
+   * e emite métricas de divergência. Não envia nada ao paciente.
+   */
+  private async shadowNewFlow(input: {
+    row: InboxRow;
+    messageText: string;
+    knowledge: KnowledgeData;
+    oldRoutingTool: string | null;
+    oldAction: string;
+  }): Promise<void> {
+    try {
+      const { row, messageText, knowledge, oldRoutingTool, oldAction } = input;
+
+      const qualification = await this.readNewQualificationState(row.phone);
+      const recentTurns = await this.loadNewFlowConversationContext(row.phone, row.id);
+
+      const newResult = await orchestrate({
+        message: messageText,
+        phone: row.phone,
+        qualification,
+        knowledge,
+        recentTurns,
+        openai: {
+          apiKey: this.config.openaiApiKey ?? "",
+          model: this.config.openaiModel,
+          timeoutMs: this.config.openaiRoutingTimeoutMs ?? 4000,
+        },
+      });
+
+      const newAction = newResult.action.type;
+      const newIntent = newResult.parser.intent;
+      const agreement = oldAction === newAction;
+
+      // Métrica de divergência
+      incrementCounter(
+        "luna_new_vs_old_disagreement_total",
+        "Comparação shadow entre fluxo novo e antigo.",
+        { intent: newIntent, agreement: String(agreement) },
+      );
+
+      // Log estruturado de todas as comparações
+      log("info", "new_flow_shadow_comparison", {
+        correlationId: row.id,
+        phone: row.phone,
+        messagePreview: messageText.slice(0, 60),
+        oldRoutingTool: oldRoutingTool ?? "regex",
+        oldAction,
+        newIntent,
+        newAction,
+        agreement,
+        newFallbackReason: newResult.fallbackReason ?? "none",
+        parserConfidence: newResult.parser.confidence,
+        parserSentiment: newResult.parser.sentiment,
+      });
+
+      if (!agreement) {
+        log("warn", "new_flow_shadow_disagreement", {
+          correlationId: row.id,
+          phone: row.phone,
+          oldAction,
+          newAction,
+          newIntent,
+          newFallbackReason: newResult.fallbackReason ?? "none",
+        });
+      }
+    } catch (error) {
+      log("error", "new_flow_shadow_error", {
+        correlationId: input.row.id,
+        phone: input.row.phone,
+        error,
+      });
+      incrementCounter(
+        "luna_new_vs_old_disagreement_total",
+        "Comparação shadow entre fluxo novo e antigo.",
+        { intent: "shadow_error", agreement: "false" },
+      );
+    }
+  }
   /**
    * Current BR (UTC-3) date as `YYYY-MM-DD`. The token budget resets at
    * midnight BRT so the limit tracks clinic operating hours rather than UTC.
@@ -995,7 +1165,7 @@ export class MessagingWorker {
     const { row, messageText, knowledge } = input;
 
     const qualification = await this.readNewQualificationState(row.phone);
-    const recentTurns = await this.loadConversationContext(row.phone, row.id);
+    const recentTurns = await this.loadNewFlowConversationContext(row.phone, row.id);
 
     const orchestrateResult = await orchestrate({
       message: messageText,
@@ -1209,6 +1379,67 @@ export class MessagingWorker {
       const verifiedFacts = knowledge
         ? resolveVerifiedFacts(messageText, knowledge, { insurancePlanId: selectedPlanId ?? undefined })
         : undefined;
+
+      // ─── Branch principal: novo fluxo quando LUNA_USE_NEW_FLOW=true ──────────
+      if (this.config.useNewFlow) {
+        if (!knowledge) {
+          // O novo fluxo precisa de knowledge para FAQ, plano e procedimento.
+          // Se não carregou, cai no regex.
+          log("warn", "new_flow_fallback_no_knowledge", { correlationId: row.id, intent });
+        } else {
+          const newFlowResult = await this.tryNewFlow({ row, messageText, knowledge });
+          const { operations } = newFlowResult;
+
+          log("info", "new_flow_processing", {
+            correlationId: row.id,
+            phone: row.phone,
+            action: newFlowResult.result.action.type,
+            intent: newFlowResult.result.parser.intent,
+            fallbackReason: newFlowResult.result.fallbackReason ?? "none",
+            parserConfidence: newFlowResult.result.parser.confidence,
+          });
+
+          await this.executeNewFlowOperations(row, operations, newFlowResult.result);
+
+          // Shadow: executa fluxo novo em paralelo sem enviar, compara com antigo
+          if (this.config.shadowNewFlow) {
+            const oldRoutingTool: string | null = null; // não há router tool no caminho regex puro
+            const oldAction = "regex_fallback"; // label placeholder pro shadow log
+            void this.shadowNewFlow({ row, messageText, knowledge, oldRoutingTool, oldAction });
+          }
+
+          await this.updateOrThrow("whatsapp_inbox", row.id, {
+            status: "processed",
+            processed_at: new Date().toISOString(),
+            last_error: null,
+            classified_intent: newFlowResult.result.parser.intent,
+            processed_action: newFlowResult.result.action.type,
+          }, row.lease_token);
+
+          incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", {
+            queue: "inbox",
+            result: newFlowResult.result.action.type === "no_action" ? "answered" : newFlowResult.result.action.type,
+            routing: "new",
+          });
+
+          log("info", "inbox_message_processed", {
+            correlationId: row.id,
+            intent: newFlowResult.result.parser.intent,
+            action: newFlowResult.result.action.type,
+            routing: "new",
+            routingTool: null,
+            factResolution: verifiedFacts?.kind ?? "not_requested",
+            factSource: verifiedFactSource(verifiedFacts),
+            groundingResult: "not_used",
+            attempts: row.attempts,
+            durationMs: Date.now() - startedAt,
+          });
+
+          return;
+        }
+      }
+      // ─── Fim do branch do novo fluxo ───────────────────────────────────────
+
       // PR 6: LLM-primary path. When the flag is `"llm"`, `tryRouter` decides
       // the reply. On any fallback reason, the regex cascade runs unchanged
       // so the inbox row finalizes deterministically. PR 6 uses the stubbed
@@ -1284,6 +1515,16 @@ export class MessagingWorker {
           // regression where someone forgets the try/catch inside the helper.
           log("error", "routing_shadow_unexpected_error", { correlationId: row.id, error });
         }
+      }
+      // ─── Shadow do novo fluxo: executa em paralelo, não envia, compara ─────────
+      if (this.config.shadowNewFlow && !this.config.useNewFlow && knowledge) {
+        void this.shadowNewFlow({
+          row,
+          messageText,
+          knowledge,
+          oldRoutingTool: routingTool,
+          oldAction: processedAction ?? regexTool,
+        });
       }
       if (await this.ignoreIfConversationPaused(row, intent)) return;
       if (handoff) {
