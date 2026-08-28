@@ -36,10 +36,10 @@ CREATE TABLE IF NOT EXISTS public.whatsapp_qualification_state (
   awaiting_slot    text NULL
                     CHECK (awaiting_slot IN ('nome', 'procedimento', 'plano', 'para_quem')),
   nome             text NULL,
-  procedimento_id  text NULL
+  procedimento_id  uuid NULL
                     REFERENCES public.procedures(id) ON DELETE SET NULL,
   procedimento_nome text NULL,
-  plano_id         text NULL
+  plano_id         uuid NULL
                     REFERENCES public.insurance_plans(id) ON DELETE SET NULL,
   plano_nome       text NULL,
   para_outra_pessoa boolean NULL,
