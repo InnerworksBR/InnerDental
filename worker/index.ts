@@ -53,6 +53,10 @@ import {
 } from "../src/integrations/google-calendar/service-account-auth.ts";
 import { syncDirectCalendarAppointments } from "./calendar-sync.ts";
 
+// ─── Novo fluxo (remodelação) imports ─────────────────────────────────────────
+import { orchestrate, emptyQualification, type OrchestrateResult } from "../src/domain/messaging/orchestrator.ts";
+import { actionToOperations, type WorkerOperation } from "../src/domain/messaging/worker-adapter.ts";
+
 type OutboxRow = { id: string; aggregate_id: string; event_type: string; attempts: number; lease_token?: string; payload?: { correlation_id?: unknown; scheduled_start_at?: unknown; summary_date?: unknown } };
 type InboxRow = { id: string; phone: string; message_text: string; attempts: number; lease_token?: string };
 type PlanTriageSession = {
@@ -936,6 +940,83 @@ export class MessagingWorker {
     const month = String(brt.getUTCMonth() + 1).padStart(2, "0");
     const day = String(brt.getUTCDate()).padStart(2, "0");
     return `${year}-${month}-${day}`;
+  }
+
+  // ─── Novo fluxo (remodelação) ────────────────────────────────────────────────
+
+  /**
+   * Lê o estado de qualificação do novo fluxo via RPC.
+   * Por ora retorna emptyQualification() — a tabela real vem na etapa 2.
+   * TODO(etapa2): substituir por chamada real à RPC
+   *   `read_whatsapp_qualification_state`.
+   */
+  private async readNewQualificationState(phone: string) {
+    // Etapa 2 vai substituir este stub pela RPC real.
+    // Por enquanto, retorna estado vazio.
+    return emptyQualification();
+  }
+
+  /**
+   * Aplica writes de QualificationState via RPC.
+   * TODO(etapa2): substituir por chamada real à RPC
+   *   `apply_whatsapp_qualification_state`.
+   */
+  private async applyNewQualificationState(
+    phone: string,
+    writes: Record<string, unknown>,
+    inboxId: string,
+  ) {
+    // Etapa 2 vai substituir este stub pela RPC real.
+    // Por enquanto, não faz nada (o estado não persiste ainda).
+    log("debug", "new_flow_slot_persist_skipped", {
+      phone,
+      inboxId,
+      writes,
+      note: "etapa2_substituir_por_RPC_real",
+    });
+  }
+
+  /**
+   * Executa o novo fluxo via orquestrador (substitui routeWithTools + executeRouterTool).
+   *
+   * Só é chamado quando `config.useNewFlow === true`.
+   * Não é reached ainda nesta subetapa — fica como stub preparado
+   * para a subetapa 1c.
+   */
+  private async tryNewFlow(input: {
+    row: InboxRow;
+    messageText: string;
+    knowledge: KnowledgeData;
+  }): Promise<{
+    result: OrchestrateResult;
+    operations: WorkerOperation[];
+    routing: "new";
+  }> {
+    const { row, messageText, knowledge } = input;
+
+    const qualification = await this.readNewQualificationState(row.phone);
+    const recentTurns = await this.loadConversationContext(row.phone, row.id);
+
+    const orchestrateResult = await orchestrate({
+      message: messageText,
+      phone: row.phone,
+      qualification,
+      knowledge,
+      recentTurns,
+      openai: {
+        apiKey: this.config.openaiApiKey ?? "",
+        model: this.config.openaiModel,
+        timeoutMs: this.config.openaiRoutingTimeoutMs ?? 4000,
+      },
+    });
+
+    const operations = actionToOperations(orchestrateResult.action, row.phone);
+
+    return {
+      result: orchestrateResult,
+      operations,
+      routing: "new",
+    };
   }
   /**
    * LLM-primary path introduced by PR 6. Returns either:
