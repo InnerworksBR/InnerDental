@@ -58,9 +58,10 @@ function planTermVariants(plan: KnowledgeData["plans"][number]): string[] {
 }
 
 function publicPlanTerms(data: Pick<KnowledgeData, "plans" | "aliases">): PlanTerm[] {
-  const byId = new Map(data.plans.map((plan) => [plan.id, plan]));
+  const activePlans = data.plans.filter((plan) => plan.active);
+  const byId = new Map(activePlans.map((plan) => [plan.id, plan]));
   const terms: PlanTerm[] = [];
-  for (const plan of data.plans) for (const term of planTermVariants(plan)) terms.push({ term, plan });
+  for (const plan of activePlans) for (const term of planTermVariants(plan)) terms.push({ term, plan });
   for (const alias of data.aliases) {
     const plan = byId.get(alias.insurance_plan_id);
     if (!plan) continue;

@@ -1115,35 +1115,60 @@ export class MessagingWorker {
   // ─── Novo fluxo (remodelação) ────────────────────────────────────────────────
 
   /**
-   * Lê o estado de qualificação do novo fluxo via RPC.
-   * Por ora retorna emptyQualification() — a tabela real vem na etapa 2.
-   * TODO(etapa2): substituir por chamada real à RPC
-   *   `read_whatsapp_qualification_state`.
+   * Lê o estado de qualificação via RPC read_whatsapp_qualification_state.
    */
   private async readNewQualificationState(phone: string) {
-    // Etapa 2 vai substituir este stub pela RPC real.
-    // Por enquanto, retorna estado vazio.
-    return emptyQualification();
+    const { data, error } = await this.db.rpc("read_whatsapp_qualification_state", {
+      p_phone: phone,
+    });
+    if (error) {
+      log("error", "new_flow_state_read_error", { phone, error });
+      return emptyQualification();
+    }
+    const row = data as {
+      phone?: string;
+      awaiting_slot?: string | null;
+      nome?: string | null;
+      procedimento_id?: string | null;
+      procedimento_nome?: string | null;
+      plano_id?: string | null;
+      plano_nome?: string | null;
+      para_outra_pessoa?: boolean | null;
+      last_intent?: string | null;
+    } | null;
+    if (!row || !row.phone) {
+      return emptyQualification();
+    }
+    return {
+      awaiting_slot: (row.awaiting_slot as "nome" | "procedimento" | "plano" | "para_quem" | null) ?? null,
+      nome: row.nome ?? undefined,
+      procedimento_id: row.procedimento_id ?? undefined,
+      procedimento_nome: row.procedimento_nome ?? undefined,
+      plano_id: row.plano_id === null ? null : (row.plano_id ?? undefined),
+      plano_nome: row.plano_nome ?? undefined,
+      para_outra_pessoa: row.para_outra_pessoa ?? undefined,
+      last_intent: (row.last_intent as "saudacao" | "faq" | "plano" | "procedimento" | "agendar" | "humano" | undefined) ?? undefined,
+    };
   }
 
   /**
-   * Aplica writes de QualificationState via RPC.
-   * TODO(etapa2): substituir por chamada real à RPC
-   *   `apply_whatsapp_qualification_state`.
+   * Persiste writes de QualificationState via RPC apply_whatsapp_qualification_state.
    */
   private async applyNewQualificationState(
     phone: string,
     writes: Record<string, unknown>,
     inboxId: string,
   ) {
-    // Etapa 2 vai substituir este stub pela RPC real.
-    // Por enquanto, não faz nada (o estado não persiste ainda).
-    log("debug", "new_flow_slot_persist_skipped", {
-      phone,
-      inboxId,
-      writes,
-      note: "etapa2_substituir_por_RPC_real",
+    const { data, error } = await this.db.rpc("apply_whatsapp_qualification_state", {
+      p_phone: phone,
+      p_writes: writes,
+      p_inbox_id: inboxId,
     });
+    if (error || data !== true) {
+      log("error", "new_flow_state_persist_error", { phone, inboxId, writes, error });
+      throw new Error("NEW_FLOW_STATE_PERSIST_FAILED");
+    }
+    log("debug", "new_flow_state_persisted", { phone, inboxId, writes });
   }
 
   /**
