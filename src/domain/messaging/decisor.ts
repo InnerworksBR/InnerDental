@@ -413,8 +413,13 @@ export function resolveHintsAgainstKnowledge(
   if (next.plano_nome && next.plano_id === undefined) {
     const triage = triageInsurancePlan(next.plano_nome, knowledge);
     if (triage.kind === "accepted" && triage.plan) {
-      next.plano_id = triage.plan.id;
-      next.plano_nome = triage.plan.name;
+      if (triage.plan.active) {
+        next.plano_id = triage.plan.id;
+        next.plano_nome = triage.plan.name;
+      } else {
+        // Plano inativo: trata como não aceito no novo fluxo.
+        next.plano_id = null;
+      }
     } else if (triage.kind === "rejected") {
       // Marca como rejeitado explicitamente (null) pra não perguntar de novo.
       next.plano_id = null;
