@@ -1,7 +1,7 @@
 export type KnowledgeData = {
-  plans: Array<{ id: string; name: string; instructions: string | null }>;
+  plans: Array<{ id: string; name: string; active?: boolean; instructions: string | null }>;
   aliases: Array<{ alias: string; insurance_plan_id: string }>;
-  procedures: Array<{ id?: string; name: string; description: string | null; online_booking: boolean }>;
+  procedures: Array<{ id?: string; name: string; description: string | null; online_booking: boolean; active?: boolean }>;
   coverage?: Array<{ procedure_id: string; insurance_plan_id: string; accepted: boolean; instructions: string | null }>;
   faqs: Array<{ category?: string; question: string; answer: string }>;
 };

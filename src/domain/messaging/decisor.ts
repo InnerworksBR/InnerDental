@@ -15,7 +15,7 @@
  *   - Em caso de dúvida, ESCALA pro humano (fail-safe).
  */
 
-import type { Intent, ParserOutput } from "./intent-parser.ts";
+import type { Intent, ParserOutput } from "./intent-parser";
 import type { KnowledgeData } from "../knowledge/service.ts";
 import {
   findRequestedProcedure,
@@ -177,18 +177,18 @@ function handlePlanQuestion(parser: ParserOutput, message: string, knowledge: Kn
     const triage = triageInsurancePlan(parser.slots.plano_hint, knowledge);
 
     if (triage.kind === "accepted" && triage.plan) {
-      return {
-        type: "send_interactive",
-        message: knowledgeAnswerInteractiveMessage(`Sim, atendemos *${triage.plan.name}*.`, []),
-        reason: `Plano "${parser.slots.plano_hint}" aceito`,
-      };
-    }
-
-    if (triage.kind === "rejected") {
+      if (triage.plan.active) {
+        return {
+          type: "send_interactive",
+          message: knowledgeAnswerInteractiveMessage(`Sim, atendemos *${triage.plan.name}*.`, []),
+          reason: `Plano "${parser.slots.plano_hint}" aceito`,
+        };
+      }
+      // Plano inativo: trata como não aceito.
       return {
         type: "send_text",
         text: "Esse plano não está na nossa lista de atendimento agora. Se quiser, posso conectar você com a equipe para confirmar.",
-        reason: `Plano "${parser.slots.plano_hint}" não aceito`,
+        reason: `Plano "${parser.slots.plano_hint}" não está ativo`,
       };
     }
 
@@ -258,7 +258,7 @@ function handleProcedureQuestion(parser: ParserOutput, message: string, knowledg
     const active = knowledge.procedures.filter((p) => p.active);
     return {
       type: "send_interactive",
-      message: verifiedProcedureListMessage(active),
+      message: knowledgeAnswerInteractiveMessage(verifiedProcedureListMessage(active), []),
       reason: "Lista de procedimentos",
     };
   }
@@ -417,14 +417,12 @@ export function resolveHintsAgainstKnowledge(
         next.plano_id = triage.plan.id;
         next.plano_nome = triage.plan.name;
       } else {
-        // Plano inativo: trata como não aceito no novo fluxo.
+        // Plano inativo: marca como não aceito (null).
         next.plano_id = null;
       }
-    } else if (triage.kind === "rejected") {
-      // Marca como rejeitado explicitamente (null) pra não perguntar de novo.
-      next.plano_id = null;
     }
-    // Ambiguous: deixa plano_id undefined pra próxima rodada pedir mais detalhe.
+    // Demais casos (ambiguous, unsupported): deixa plano_id undefined pra
+    // próxima rodada pedir mais detalhe ou escalar.
   }
 
   return next;
