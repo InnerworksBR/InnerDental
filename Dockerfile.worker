@@ -4,7 +4,7 @@ LABEL org.opencontainers.image.title="luna-worker" org.opencontainers.image.revi
 ENV NODE_ENV=production
 WORKDIR /app
 RUN npm install --global pnpm@11.6.0 --fetch-timeout=600000
-COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
 RUN pnpm install --frozen-lockfile --prod
 COPY --chown=node:node src/domain/knowledge ./src/domain/knowledge
 COPY --chown=node:node src/domain/appointments ./src/domain/appointments
