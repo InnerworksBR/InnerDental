@@ -87,7 +87,7 @@ export function AdminIncidents({ incidents }: { incidents: Incident[] }) {
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
         </select>
-        <p className="ops-form-help">A categoria ajuda a triagem. Se não tiver certeza, deixe em "Outra".</p>
+        <p className="ops-form-help">A categoria ajuda a triagem. Se não tiver certeza, deixe em &ldquo;Outra&rdquo;.</p>
         <label htmlFor="incident-summary">Resumo</label>
         <input id="incident-summary" name="summary" required minLength={1} maxLength={500} />
         <label htmlFor="incident-correlation">Correlation ID (opcional)</label>

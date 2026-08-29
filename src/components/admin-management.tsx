@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
 type Procedure = { id: string; name: string; description: string | null; online_booking: boolean; active: boolean };
 type Alias = { id: string; alias: string; active: boolean };
@@ -227,7 +227,8 @@ function Patients({ patients, plans, busy, command, onSearch }: { patients: Pati
 
 function Team({ team, canManage, busy, command, onConfirm, onInvite, inviteNonce }: { team: TeamMember[]; canManage: boolean; busy: boolean; command: (payload: Record<string, unknown>, success: string) => Promise<boolean>; onConfirm: (title: string, body: string, onConfirm: () => void) => void; onInvite: (email: string, role: "owner" | "operator") => void; inviteNonce: number }) {
   const [email, setEmail] = useState(""); const [role, setRole] = useState<"owner" | "operator">("operator");
-  useEffect(() => { setEmail(""); }, [inviteNonce]);
+  const [resetKey, setResetKey] = useState(0);
+  useEffect(() => { startTransition(() => { setEmail(""); setResetKey((k) => k + 1); }); }, [inviteNonce]);
   return <div className="management-grid"><article className="management-card"><h3>Equipe interna</h3><div className="management-list">{team.map((item) => <div className="management-row management-member" key={item.user_id}><span><b>{item.email || item.user_id}</b><small>{item.role === "owner" ? "Proprietário" : "Operador"}</small></span><em className={item.active ? "on" : "off"}>{item.active ? "ativo" : "revogado"}</em>{canManage && <div className="member-actions"><button type="button" disabled={busy} onClick={() => void command({ action: "save_access", userId: item.user_id, role: item.role === "owner" ? "operator" : "owner", active: item.active }, "Papel atualizado.")}>Tornar {item.role === "owner" ? "operador" : "proprietário"}</button><button type="button" disabled={busy} onClick={() => onConfirm(item.active ? "Revogar este acesso?" : "Reativar este acesso?", item.email ?? item.user_id, () => void command({ action: "save_access", userId: item.user_id, role: item.role, active: !item.active }, "Acesso atualizado."))}>{item.active ? "Revogar" : "Reativar"}</button></div>}</div>)}</div></article>{canManage && <form className="management-card management-form" onSubmit={(event) => { event.preventDefault(); onInvite(email, role); }}><h3>Convidar pessoa</h3><p className="management-note">Esta ação envia um e-mail real pelo Supabase Auth.</p><label>E-mail<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Papel<select value={role} onChange={(event) => setRole(event.target.value as "owner" | "operator")}><option value="operator">Operador</option><option value="owner">Proprietário</option></select></label><button type="submit" className="management-primary" disabled={busy}>Enviar convite</button></form>}</div>;
 }
 

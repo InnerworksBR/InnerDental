@@ -19,7 +19,8 @@ export function usePolling<T>(fetcher: () => Promise<T>, { enabled = true, inter
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
+
+  useEffect(() => { fetcherRef.current = fetcher; });
 
   const refresh = useCallback(async () => {
     try {
@@ -45,7 +46,7 @@ export function usePolling<T>(fetcher: () => Promise<T>, { enabled = true, inter
     };
 
     void refresh();
-    setIsLive(true);
+    queueMicrotask(() => setIsLive(true));
     timer = setInterval(tick, intervalMs);
 
     const onVisibility = () => {
