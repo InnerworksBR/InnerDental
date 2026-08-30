@@ -1581,7 +1581,6 @@ export class MessagingWorker {
         if (error || !handoffId) throw new Error("HANDOFF_ENQUEUE_FAILED");
         // Handoff enqueued não é removido mesmo se humano assumir — equipe precisa saber
       }
-      }
       if (!preparedInboxLink?.sentAt) {
         await this.sendReply(row.phone, reply);
         if (preparedInboxLink) await this.markInboxAccessLinkDelivered(row.phone, preparedInboxLink.sourceInboxId);
