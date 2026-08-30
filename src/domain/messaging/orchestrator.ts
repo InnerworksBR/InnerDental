@@ -36,6 +36,11 @@ export type OrchestrateInput = {
 export type OrchestrateResult = {
   parser: ParserOutput;
   qualificationAfterResolve: QualificationState;
+  /** IDs resolvidos (procedure_id, plano_id) após validação contra knowledge */
+  resolvedIds?: {
+    procedimento_id?: string;
+    plano_id?: string | null;
+  };
   action: Action;
   fallbackReason?: "OPENAI_UNREACHABLE" | "OPENAI_TIMEOUT" | "OPENAI_EMPTY" | "OPENAI_SCHEMA_INVALID";
 };
@@ -78,6 +83,10 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
   return {
     parser,
     qualificationAfterResolve: resolved,
+    resolvedIds: {
+      procedimento_id: resolved.procedimento_id,
+      plano_id: resolved.plano_id,
+    },
     action,
   };
 }

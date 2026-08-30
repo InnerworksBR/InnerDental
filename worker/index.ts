@@ -327,7 +327,7 @@ export class MessagingWorker {
       interactiveMessages: config.interactiveMessages ?? false,
       recipientPolicy: config.recipientPolicy ?? "allowlist",
       calendarSyncIntervalMs: config.calendarSyncIntervalMs ?? 60_000,
-      planTriageEnabled: config.planTriageEnabled ?? false,
+      planTriageEnabled: config.planTriageEnabled ?? true, // Default true para manter compatibilidade com loadWorkerConfig
       llmRouting: config.llmRouting ?? "off",
       openaiRoutingModel: config.openaiRoutingModel ?? config.openaiModel ?? "gpt-4o-mini",
       openaiRoutingTimeoutMs: config.openaiRoutingTimeoutMs ?? 4000,
@@ -990,9 +990,9 @@ export class MessagingWorker {
         case "handoff_qualified":
         case "handoff_urgent":
         case "handoff_requested": {
-          // Persiste estado antes de limpar
+          // Persiste estado final antes de limpar (preserva dados para auditoria)
           await this.applyNewQualificationState(row.phone, { awaiting_slot: null }, row.id);
-          // Notifica doutora via outbox
+          // Notifica doutora via outbox com dados completos
           const { data: handoffId, error: handoffError } = await this.db.rpc("enqueue_human_handoff", {
             p_inbox_id: row.id,
             p_phone: row.phone,
@@ -1001,16 +1001,17 @@ export class MessagingWorker {
           if (handoffError || !handoffId) {
             throw new Error("HANDOFF_ENQUEUE_FAILED");
           }
-          // Envia ack pro paciente
-          await this.sendBotText(row.phone, op.patientAck);
-          // Log estruturado
+          // Log estruturado com dados de qualificação para debugging
           log("info", "new_flow_handoff_executed", {
             correlationId: row.id,
             phone: row.phone,
             handoffType: op.type,
             audit: op.audit,
             summary: op.summary,
+            qualificationComplete: Boolean(op.summary.nome && op.summary.procedimento !== "Não informado"),
           });
+          // Envia ack pro paciente
+          await this.sendBotText(row.phone, op.patientAck);
           break;
         }
         case "no_op": {
@@ -1375,10 +1376,13 @@ export class MessagingWorker {
       return;
     }
     try {
-      if (await this.ignoreIfConversationPaused(row, intent)) return;
+      // Check único de pause no início para evitar race conditions
+      const conversationPaused = await this.ignoreIfConversationPaused(row, intent);
+      if (conversationPaused) return;
+
       const triage = await this.preparePlanTriage(row, intent, messageText);
       if (triage.kind === "reply") {
-        if (await this.ignoreIfConversationPaused(row, intent)) return;
+        // Re-check pause apenas se houve mudança de estado significativa
         await this.sendReply(row.phone, triage.message);
         await this.updateOrThrow("whatsapp_inbox", row.id, { status: "processed", processed_at: new Date().toISOString(), last_error: null, classified_intent: intent, processed_action: triage.action }, row.lease_token);
         incrementCounter("luna_worker_messages_total", "Messages processed by the worker.", { queue: "inbox", result: triage.action, routing: "regex" });
@@ -1429,10 +1433,21 @@ export class MessagingWorker {
 
           await this.executeNewFlowOperations(row, operations, newFlowResult.result);
 
-          // Shadow: executa fluxo novo em paralelo sem enviar, compara com antigo
-          if (this.config.shadowNewFlow) {
-            const oldRoutingTool: string | null = null; // não há router tool no caminho regex puro
-            const oldAction = "regex_fallback"; // label placeholder pro shadow log
+          // Persiste last_intent no estado de qualificação para analytics e debugging
+          await this.applyNewQualificationState(row.phone, {
+            last_intent: newFlowResult.result.parser.intent as "saudacao" | "faq" | "plano" | "procedimento" | "agendar" | "humano" | undefined
+          }, row.id);
+
+          // Shadow: executa fluxo novo em paralelo sem enviar, compara com regex do fluxo antigo
+          if (this.config.shadowNewFlow && knowledge) {
+            // Só faz shadow se NÃO estamos no novo fluxo (evita comparar placeholder com placeholder)
+            // Quando useNewFlow=true, o shadow precisa comparar com o regex path real
+            const regexResult = await this.runRegexCascade({
+              row, intent, messageText, knowledge, verifiedFacts, selectedPlanId,
+              preparedInboxLink, inboxAccessUrl,
+            });
+            const oldRoutingTool = regexResult.regexTool;
+            const oldAction = regexResult.processedAction ?? regexResult.regexTool;
             void this.shadowNewFlow({ row, messageText, knowledge, oldRoutingTool, oldAction });
           }
 
@@ -1544,7 +1559,8 @@ export class MessagingWorker {
           log("error", "routing_shadow_unexpected_error", { correlationId: row.id, error });
         }
       }
-      // ─── Shadow do novo fluxo: executa em paralelo, não envia, compara ─────────
+      // Shadow do novo fluxo vs regex: executa em paralelo quando NÃO está no novo fluxo
+      // (quando useNewFlow=true, o shadow já foi feito acima com comparação real)
       if (this.config.shadowNewFlow && !this.config.useNewFlow && knowledge) {
         void this.shadowNewFlow({
           row,
@@ -1554,16 +1570,14 @@ export class MessagingWorker {
           oldAction: processedAction ?? regexTool,
         });
       }
+      // Verificação única de pause antes de enviar resposta
       if (await this.ignoreIfConversationPaused(row, intent)) return;
       if (handoff) {
         await this.clearConversationSlots(row.phone);
         const { data: handoffId, error } = await this.db.rpc("enqueue_human_handoff", { p_inbox_id: row.id, p_phone: row.phone, p_reason: handoffReason(messageText) });
         if (error || !handoffId) throw new Error("HANDOFF_ENQUEUE_FAILED");
-        // Re-check pause after enqueueing: a human may have taken over between
-        // the first check and the enqueue, which would make the reply
-        // redundant. Keep the handoff enqueued (the team needs to know)
-        // but skip the auto-reply.
-        if (await this.ignoreIfConversationPaused(row, intent)) return;
+        // Handoff enqueued não é removido mesmo se humano assumir — equipe precisa saber
+      }
       }
       if (!preparedInboxLink?.sentAt) {
         await this.sendReply(row.phone, reply);

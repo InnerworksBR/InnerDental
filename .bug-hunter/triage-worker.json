@@ -1,0 +1,52 @@
+{
+  "generatedAt": "2026-08-30T15:42:22.393Z",
+  "target": "C:\\Apps\\Projeto_priscila\\worker",
+  "totalFiles": 2,
+  "scannableFiles": 2,
+  "strategy": "small",
+  "modeFile": "modes/small.md",
+  "needsLoop": false,
+  "fileBudget": 2,
+  "avgLines": 875,
+  "avgTokensPerFile": 12305,
+  "estimatedTotalLines": 1750,
+  "sampledFiles": 2,
+  "plannedChunkCount": 1,
+  "domains": [
+    {
+      "path": ".",
+      "tier": "MEDIUM",
+      "fileCount": 2,
+      "riskBreakdown": {
+        "critical": 0,
+        "high": 0,
+        "medium": 2,
+        "low": 0,
+        "context-only": 0
+      }
+    }
+  ],
+  "scanOrder": [
+    "calendar-sync.ts",
+    "index.ts"
+  ],
+  "tokenEstimate": {
+    "recon": 40,
+    "perHunterChunk": 24610,
+    "totalPipeline": 25050
+  },
+  "recommendations": [
+    "Small codebase — Recon is optional, proceed directly to Hunter.",
+    "Large files (avg 875 lines) — FILE_BUDGET is low (2). Chunking is important."
+  ],
+  "riskMap": {
+    "critical": [],
+    "high": [],
+    "medium": [
+      "calendar-sync.ts",
+      "index.ts"
+    ],
+    "low": [],
+    "context-only": []
+  }
+}
