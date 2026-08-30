@@ -15,6 +15,7 @@ COPY --chown=node:node src/integrations/openai ./src/integrations/openai
 COPY --chown=node:node src/lib/messaging ./src/lib/messaging
 COPY --chown=node:node src/lib/observability ./src/lib/observability
 COPY --chown=node:node src/lib/phone ./src/lib/phone
+COPY --chown=node:node src/lib/privacy ./src/lib/privacy
 COPY --chown=node:node src/lib/reliability ./src/lib/reliability
 COPY --chown=node:node worker ./worker
 EXPOSE 3001
