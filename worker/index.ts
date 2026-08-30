@@ -1107,9 +1107,12 @@ export class MessagingWorker {
   /**
    * Current BR (UTC-3) date as `YYYY-MM-DD`. The token budget resets at
    * midnight BRT so the limit tracks clinic operating hours rather than UTC.
+   * Note: Brazil abolished DST in 2019, so UTC-3 is always correct.
    */
   private currentBrDay(now: Date = new Date()): string {
-    const brt = new Date(now.getTime() - 3 * 60 * 60_000);
+    // Brasília timezone is UTC-3 (no DST since April 2019)
+    const BRT_OFFSET_MS = 3 * 60 * 60 * 1000;
+    const brt = new Date(now.getTime() - BRT_OFFSET_MS);
     const year = brt.getUTCFullYear();
     const month = String(brt.getUTCMonth() + 1).padStart(2, "0");
     const day = String(brt.getUTCDate()).padStart(2, "0");
@@ -1607,7 +1610,10 @@ export class MessagingWorker {
   private async createAccessUrl(phone: string) {
     const token = opaqueToken();
     const { error } = await this.db.from("access_tokens").insert({ phone, token_hash: tokenHash(token), origin: "whatsapp_link", expires_at: new Date(Date.now() + WHATSAPP_ACCESS_LINK_TTL_MS).toISOString() });
-    if (error) throw error;
+    if (error) {
+      log("error", "create_access_url_failed", { phone, error });
+      throw new Error(`ACCESS_TOKEN_INSERT_FAILED:${error.code ?? "UNKNOWN"}`);
+    }
     return `${this.config.portalBaseUrl}/acesso#token=${encodeURIComponent(token)}`;
   }
   private async createInboxAccessUrl(phone: string, sourceInboxId: string): Promise<PreparedInboxAccessLink> {
