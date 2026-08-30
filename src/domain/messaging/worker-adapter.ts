@@ -114,7 +114,7 @@ export function actionToOperations(
       ];
 
     case "qualification_complete":
-      return buildQualifiedHandoff(action.summary, action.reason);
+      return buildQualifiedHandoff(action.summary, action.reason, patientPhone);
 
     case "escalate_to_human":
       return buildUrgentHandoff(action.summary, action.reason, patientPhone);
@@ -129,12 +129,16 @@ export function actionToOperations(
   }
 }
 
-function buildQualifiedHandoff(summary: PatientSummary, reason: string): WorkerOperation[] {
+function buildQualifiedHandoff(
+  summary: PatientSummary,
+  reason: string,
+  patientPhone: string,
+): WorkerOperation[] {
   return [
     {
       type: "handoff_qualified",
       patientAck: patientHandoffAckMessage,
-      doctorMessage: handoffToDoctorMessage("", summary),
+      doctorMessage: handoffToDoctorMessage(patientPhone, summary),
       summary,
       audit: { action: "handoff_qualified", reason },
     },

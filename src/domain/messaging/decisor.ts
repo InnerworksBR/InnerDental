@@ -412,17 +412,15 @@ export function resolveHintsAgainstKnowledge(
 
   if (next.plano_nome && next.plano_id === undefined) {
     const triage = triageInsurancePlan(next.plano_nome, knowledge);
-    if (triage.kind === "accepted" && triage.plan) {
-      if (triage.plan.active) {
-        next.plano_id = triage.plan.id;
-        next.plano_nome = triage.plan.name;
-      } else {
-        // Plano inativo: marca como não aceito (null).
-        next.plano_id = null;
-      }
+    if (triage.kind === "accepted" && triage.plan && triage.plan.active) {
+      next.plano_id = triage.plan.id;
+      next.plano_nome = triage.plan.name;
+      return next;
     }
-    // Demais casos (ambiguous, unsupported): deixa plano_id undefined pra
-    // próxima rodada pedir mais detalhe ou escalar.
+    // Plan inativo, ambíguo ou não encontrado: limpa o nome persistido para
+    // forçar a próxima rodada a passar pela rejeição educada de
+    // handlePlanQuestion (em vez de ficar presa re-avaliando o mesmo hint).
+    next.plano_nome = undefined;
   }
 
   return next;

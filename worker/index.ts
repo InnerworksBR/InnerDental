@@ -46,6 +46,7 @@ import { executeRouterTool } from "../src/domain/messaging/router-tools.ts";
 import { isCorrelationId, log } from "../src/lib/observability/logger.ts";
 import { incrementCounter, observeHistogram, renderPrometheusMetrics, setGauge } from "../src/lib/observability/metrics.ts";
 import { normalizeBrazilianPhone } from "../src/lib/phone/normalize.ts";
+import { maskPhoneForExternal } from "../src/lib/privacy/mask-phone-for-external.ts";
 import {
   GoogleServiceAccountAuth,
   readGoogleServiceAccountCredentials,
@@ -903,7 +904,7 @@ export class MessagingWorker {
     }
     const recentTurns = await this.loadConversationContext(row.phone, row.id);
     const context: RoutingContext = {
-      phone: row.phone,
+      phone: maskPhoneForExternal(row.phone),
       slots: { ...EMPTY_SLOTS },
       recent_turns: recentTurns,
       knowledge: ctx.knowledge ?? { plans: [], aliases: [], procedures: [], coverage: [], faqs: [] },
@@ -1263,7 +1264,7 @@ export class MessagingWorker {
     const recentTurns = await this.loadConversationContext(input.row.phone, input.row.id);
     const persistedSlots = await this.readConversationSlots(input.row.phone);
     const context: RoutingContext = {
-      phone: input.row.phone,
+      phone: maskPhoneForExternal(input.row.phone),
       slots: persistedSlots.slots,
       recent_turns: recentTurns,
       knowledge: input.knowledge ?? { plans: [], aliases: [], procedures: [], coverage: [], faqs: [] },
@@ -1556,8 +1557,12 @@ export class MessagingWorker {
         await this.clearConversationSlots(row.phone);
         const { data: handoffId, error } = await this.db.rpc("enqueue_human_handoff", { p_inbox_id: row.id, p_phone: row.phone, p_reason: handoffReason(messageText) });
         if (error || !handoffId) throw new Error("HANDOFF_ENQUEUE_FAILED");
+        // Re-check pause after enqueueing: a human may have taken over between
+        // the first check and the enqueue, which would make the reply
+        // redundant. Keep the handoff enqueued (the team needs to know)
+        // but skip the auto-reply.
+        if (await this.ignoreIfConversationPaused(row, intent)) return;
       }
-      if (await this.ignoreIfConversationPaused(row, intent)) return;
       if (!preparedInboxLink?.sentAt) {
         await this.sendReply(row.phone, reply);
         if (preparedInboxLink) await this.markInboxAccessLinkDelivered(row.phone, preparedInboxLink.sourceInboxId);

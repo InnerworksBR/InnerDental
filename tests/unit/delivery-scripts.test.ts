@@ -13,7 +13,7 @@ describe("delivery automation", () => {
     execFileSync(process.execPath, ["scripts/check-migrations.mjs", "--output", output], { cwd: process.cwd() });
     const receipt = JSON.parse(readFileSync(output, "utf8"));
     expect(receipt.migrationCount).toBeGreaterThanOrEqual(12); expect(receipt.destructiveFindings).toEqual([]);
-    expect(receipt.migrations.at(-1).file).toBe("202608280001_whatsapp_qualification_state.sql");
+    expect(receipt.migrations.at(-1).file).toBe("202608290032_whatsapp_processed_action_new_flow.sql");
   });
   it("creates a sanitized release manifest from immutable receipts", () => {
     const directory = mkdtempSync(join(tmpdir(), "luna-release-")); temporary.push(directory);

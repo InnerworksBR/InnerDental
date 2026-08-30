@@ -78,6 +78,16 @@ export async function generateClinicReply(input: {
 }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12_000);
+  // Tokens de tentativas descartadas (429/5xx) são somados ao resultado
+  // final — sem isto o budget diário ignora o custo real dos retries.
+  let discardedTokensIn = 0;
+  let discardedTokensOut = 0;
+  const accumulateDiscardedUsage = async (response: Response) => {
+    const body = (await response.clone().json().catch(() => null)) as ResponseBody | null;
+    if (!body) return;
+    discardedTokensIn += body.usage?.input_tokens ?? 0;
+    discardedTokensOut += body.usage?.output_tokens ?? 0;
+  };
   try {
     const response = await withBoundedRetry(async () => {
       const candidate = await fetch("https://api.openai.com/v1/responses", {
@@ -113,9 +123,13 @@ export async function generateClinicReply(input: {
           store: false,
         }),
       });
-      if (!candidate.ok && (candidate.status === 429 || candidate.status >= 500)) throw new RetryableOpenAIError(`OPENAI_${candidate.status}`);
+      if (!candidate.ok && (candidate.status === 429 || candidate.status >= 500)) {
+        await accumulateDiscardedUsage(candidate);
+        throw new RetryableOpenAIError(`OPENAI_${candidate.status}`);
+      }
       return candidate;
     }, { maxAttempts: 2, baseDelayMs: 200, maxDelayMs: 800, isRetryable: (error) => error instanceof RetryableOpenAIError || (error instanceof Error && error.name === "AbortError") });
+    await accumulateDiscardedUsage(response);
     if (!response.ok) throw new Error(`OPENAI_${response.status}`);
     const body = await response.json() as ResponseBody;
     const text = body.output?.flatMap((item) => item.content ?? []).filter((item) => item.type === "output_text").map((item) => item.text ?? "").join("").trim();
@@ -159,6 +173,18 @@ export async function routeWithTools(input: {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = Date.now();
+  // Tokens de tentativas descartadas (429/5xx) são somados ao resultado
+  // final — sem isto o budget diário ignora o custo real dos retries.
+  // O accumulator é local a esta chamada; as discardedUsage de
+  // generateClinicReply ficam isoladas dentro do seu próprio try.
+  let discardedTokensIn = 0;
+  let discardedTokensOut = 0;
+  const accumulateDiscardedUsage = async (response: Response) => {
+    const body = (await response.clone().json().catch(() => null)) as ResponseBody | null;
+    if (!body) return;
+    discardedTokensIn += body.usage?.input_tokens ?? 0;
+    discardedTokensOut += body.usage?.output_tokens ?? 0;
+  };
   try {
     const response = await withBoundedRetry(async () => {
       const candidate = await fetch("https://api.openai.com/v1/responses", {
@@ -202,7 +228,10 @@ export async function routeWithTools(input: {
           max_output_tokens: 200,
         }),
       });
-      if (!candidate.ok && (candidate.status === 429 || candidate.status >= 500)) throw new RetryableOpenAIError(`OPENAI_${candidate.status}`);
+      if (!candidate.ok && (candidate.status === 429 || candidate.status >= 500)) {
+        await accumulateDiscardedUsage(candidate);
+        throw new RetryableOpenAIError(`OPENAI_${candidate.status}`);
+      }
       return candidate;
     }, {
       maxAttempts,
@@ -220,8 +249,8 @@ export async function routeWithTools(input: {
     } catch {
       throw new OpenAIRouterError("OPENAI_SCHEMA_INVALID");
     }
-    const tokensIn = body.usage?.input_tokens ?? 0;
-    const tokensOut = body.usage?.output_tokens ?? 0;
+    const tokensIn = discardedTokensIn + (body.usage?.input_tokens ?? 0);
+    const tokensOut = discardedTokensOut + (body.usage?.output_tokens ?? 0);
     return { decision: parsed, tokensIn, tokensOut, latencyMs: Date.now() - startedAt };
   } catch (error) {
     if (error instanceof OpenAIRouterError) throw error;

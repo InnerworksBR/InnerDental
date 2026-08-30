@@ -213,9 +213,15 @@ export async function parseIntent(
 }
 
 function formatRecentTurns(turns: Array<{ role: "patient" | "luna"; text: string }>): string {
-  if (turns.length === 0) return "(primeira mensagem)";
-  return turns
-    .slice(-6)
-    .map((turn) => `${turn.role === "patient" ? "Paciente" : "Luna"}: ${turn.text.slice(0, 200)}`)
-    .join("\n");
+  // Seleciona os 6 turnos mais recentes com texto não-vazio. Itera do
+  // final para manter ordem cronológica sem precisar de filter+slice
+  // (que descartaria contexto do meio se os turnos antigos fossem áudio).
+  const usable: Array<{ role: "patient" | "luna"; text: string }> = [];
+  for (let i = turns.length - 1; i >= 0 && usable.length < 6; i -= 1) {
+    const turn = turns[i];
+    if (turn.text.trim().length > 0) usable.push(turn);
+  }
+  usable.reverse();
+  if (usable.length === 0) return "(primeira mensagem)";
+  return usable.map((turn) => `${turn.role === "patient" ? "Paciente" : "Luna"}: ${turn.text.slice(0, 200)}`).join("\n");
 }
