@@ -1,0 +1,70 @@
+{
+  "generatedAt": "2026-08-30T16:01:01.873Z",
+  "target": "C:\\Apps\\Projeto_priscila\\src\\domain\\messaging",
+  "totalFiles": 12,
+  "scannableFiles": 12,
+  "strategy": "parallel",
+  "modeFile": "modes/parallel.md",
+  "needsLoop": false,
+  "fileBudget": 12,
+  "avgLines": 188,
+  "avgTokensPerFile": 1901,
+  "estimatedTotalLines": 2256,
+  "sampledFiles": 12,
+  "plannedChunkCount": 1,
+  "domains": [
+    {
+      "path": ".",
+      "tier": "HIGH",
+      "fileCount": 12,
+      "riskBreakdown": {
+        "critical": 0,
+        "high": 3,
+        "medium": 9,
+        "low": 0,
+        "context-only": 0
+      }
+    }
+  ],
+  "scanOrder": [
+    "router-legacy-cascade.ts",
+    "router-tools.ts",
+    "worker-adapter.ts",
+    "decisor.ts",
+    "fingerprint.ts",
+    "handoff.ts",
+    "intent-parser.ts",
+    "intent.legacy.ts",
+    "orchestrator.ts",
+    "qualification-templates.ts",
+    "slots.ts",
+    "templates.ts"
+  ],
+  "tokenEstimate": {
+    "recon": 240,
+    "perHunterChunk": 22812,
+    "totalPipeline": 25452
+  },
+  "recommendations": [],
+  "riskMap": {
+    "critical": [],
+    "high": [
+      "router-legacy-cascade.ts",
+      "router-tools.ts",
+      "worker-adapter.ts"
+    ],
+    "medium": [
+      "decisor.ts",
+      "fingerprint.ts",
+      "handoff.ts",
+      "intent-parser.ts",
+      "intent.legacy.ts",
+      "orchestrator.ts",
+      "qualification-templates.ts",
+      "slots.ts",
+      "templates.ts"
+    ],
+    "low": [],
+    "context-only": []
+  }
+}

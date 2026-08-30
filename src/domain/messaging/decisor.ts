@@ -340,13 +340,25 @@ function askForSlot(
   state: QualificationState,
   parser: ParserOutput,
 ): Action {
+  // Persiste TODOS os slots já coletados (não só o awaiting_slot)
+  // para evitar loop infinito quando o parser extrai slots mas o estado
+  // persistido não os contém.
+  const persistAll: Partial<QualificationState> = { awaiting_slot: missing };
+  if (state.nome) persistAll.nome = state.nome;
+  if (state.procedimento_id) persistAll.procedimento_id = state.procedimento_id;
+  if (state.procedimento_nome) persistAll.procedimento_nome = state.procedimento_nome;
+  if (state.plano_id !== undefined) persistAll.plano_id = state.plano_id;
+  if (state.plano_nome) persistAll.plano_nome = state.plano_nome;
+  if (state.para_outra_pessoa !== undefined) persistAll.para_outra_pessoa = state.para_outra_pessoa;
+  if (state.last_intent) persistAll.last_intent = state.last_intent;
+
   if (missing === "nome") {
     return {
       type: "ask_qualification_slot",
       slot: "nome",
       text: "Pra eu te conectar com a doutora, me diz seu *nome completo*?",
       reason: "Coletando nome do paciente",
-      persist: { awaiting_slot: "nome" },
+      persist: persistAll,
     };
   }
   if (missing === "procedimento") {
@@ -355,7 +367,7 @@ function askForSlot(
       slot: "procedimento",
       text: "Qual *procedimento* você quer marcar? (limpeza, canal, clareamento, etc)",
       reason: "Coletando procedimento desejado",
-      persist: { awaiting_slot: "procedimento" },
+      persist: persistAll,
     };
   }
   if (missing === "plano") {
@@ -364,7 +376,7 @@ function askForSlot(
       slot: "plano",
       text: "Você tem *plano odontológico* ou prefere *particular*?",
       reason: "Coletando plano do paciente",
-      persist: { awaiting_slot: "plano" },
+      persist: persistAll,
     };
   }
   // para_quem
@@ -373,7 +385,7 @@ function askForSlot(
     slot: "para_quem",
     text: "A consulta é *pra você* ou *pra outra pessoa*?",
     reason: "Confirmando para quem é a consulta",
-    persist: { awaiting_slot: "para_quem" },
+    persist: persistAll,
   };
 }
 
