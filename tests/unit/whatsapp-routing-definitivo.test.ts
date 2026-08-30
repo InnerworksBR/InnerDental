@@ -250,6 +250,7 @@ describe("incident-018 definitive WhatsApp routing", () => {
 
   it("persists a valid Particular session and patient record before replying", async () => {
     const events: string[] = [];
+    const answeringInboxId = "00000000-0000-4000-8000-000000000031";
     const session = { status: "awaiting_plan", pending_message: "quero marcar", prompted_by_inbox_id: "00000000-0000-4000-8000-000000000030", expires_at: "2099-01-01T00:00:00.000Z" };
     const rpc = vi.fn().mockImplementation(async (name: string, value: Record<string, unknown>) => {
       if (name === "accept_whatsapp_plan_triage") {
@@ -258,6 +259,7 @@ describe("incident-018 definitive WhatsApp routing", () => {
           p_phone: "5513999999999",
           p_insurance_plan_id: "particular-id",
           p_prompted_by_inbox_id: session.prompted_by_inbox_id,
+          p_answer_inbox_id: answeringInboxId,
         });
         return { data: true, error: null };
       }
@@ -276,10 +278,10 @@ describe("incident-018 definitive WhatsApp routing", () => {
     const evolution = { sendText: vi.fn().mockImplementation(async () => { events.push("send"); }) };
     const worker = new MessagingWorker(db as never, evolution as never, { planTriageEnabled: true, portalBaseUrl: "https://agenda.example", otpSecret: testOtpSecret, pollMs: 100, healthPort: 3001, allowedRecipients: ["5513999999999"] } as never);
 
-    await worker.processInbox({ id: "00000000-0000-4000-8000-000000000031", phone: "5513999999999", message_text: "Particular", attempts: 1 });
+    await worker.processInbox({ id: answeringInboxId, phone: "5513999999999", message_text: "Particular", attempts: 1 });
 
     expect(evolution.sendText).toHaveBeenCalledWith("5513999999999", expect.stringContaining("agenda.example/acesso#token="));
-    expect(rpc).toHaveBeenCalledWith("accept_whatsapp_plan_triage", expect.objectContaining({ p_insurance_plan_id: "particular-id" }));
+    expect(rpc).toHaveBeenCalledWith("accept_whatsapp_plan_triage", expect.objectContaining({ p_insurance_plan_id: "particular-id", p_answer_inbox_id: answeringInboxId }));
     expect(events.indexOf("accepted_atomically")).toBeLessThan(events.indexOf("send"));
   });
 

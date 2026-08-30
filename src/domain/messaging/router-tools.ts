@@ -437,6 +437,7 @@ export const ROUTER_TOOLS: Record<ToolName, RouterToolDefinition> = {
         p_phone: ctx.phone,
         p_insurance_plan_id: planId,
         p_prompted_by_inbox_id: promptedByInboxId,
+        p_answer_inbox_id: ctx.inboxId,
       });
       if (error || data !== true) {
         // Falling back to a soft retry is safer than handing back a generic

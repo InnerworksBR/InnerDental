@@ -612,16 +612,18 @@ export class MessagingWorker {
     }
     return { kind: "reply", message: prompt, action: "plan_requested" };
   }
-  private async acceptPlanTriage(phone: string, planId: string, promptedByInboxId: string) {
-    // The RPC writes the patient profile and accepted triage session in one
-    // database transaction. Migration 026 dropped the `p_answer_inbox_id`
-    // parameter (the audit trail is captured by `prompted_by_inbox_id`).
+  private async acceptPlanTriage(row: InboxRow, planId: string, promptedByInboxId: string) {
+    // Migration 027 added p_answer_inbox_id: the accepting inbox must still
+    // exist and belong to the same phone, and the durable prompted-by inbox
+    // must still match. The RPC revalidates both before persisting the plan.
     const { data, error } = await this.db.rpc("accept_whatsapp_plan_triage", {
-      p_phone: phone,
+      p_phone: row.phone,
       p_insurance_plan_id: planId,
       p_prompted_by_inbox_id: promptedByInboxId,
+      p_answer_inbox_id: row.id,
     });
-    if (error || data !== true) throw new Error("PLAN_TRIAGE_ACCEPTANCE_FAILED");
+    if (error) throw new Error(`PLAN_TRIAGE_ACCEPTANCE_FAILED:${error.code ?? error.message}`);
+    if (data !== true) throw new Error("PLAN_TRIAGE_ACCEPTANCE_FAILED:DATA_NOT_TRUE");
   }
   /**
    * Contexto de conversa formatado para o parser do novo fluxo.
@@ -1394,7 +1396,7 @@ export class MessagingWorker {
         // Exact replay is intentionally sent through the same RPC: it locks
         // and revalidates the accepted patient profile and active plan before
         // the worker can recreate a portal response.
-        await this.acceptPlanTriage(row.phone, acceptedPlan!.id, acceptedPlan!.promptedByInboxId);
+        await this.acceptPlanTriage(row, acceptedPlan!.id, acceptedPlan!.promptedByInboxId);
       }
       const knowledge: KnowledgeData | undefined = ["insurance", "procedure", "faq", "conversation"].includes(intent)
         ? await this.loadKnowledge()
@@ -1577,7 +1579,15 @@ export class MessagingWorker {
       const deadLetter = row.attempts >= 6;
       if (deadLetter) incrementCounter("luna_worker_dead_letters_total", "Messages moved to dead-letter.", { queue: "inbox" });
       else incrementCounter("luna_worker_retries_total", "Messages scheduled for retry.", { queue: "inbox" });
-      await this.updateOrThrow("whatsapp_inbox", row.id, { status: "failed", available_at: retryAt(row.attempts), last_error: deadLetter ? "max_attempts_exceeded" : "processing_failed", classified_intent: intent, dead_lettered_at: deadLetter ? new Date().toISOString() : null }, row.lease_token);
+      try {
+        await this.updateOrThrow("whatsapp_inbox", row.id, { status: "failed", available_at: retryAt(row.attempts), last_error: deadLetter ? "max_attempts_exceeded" : "processing_failed", classified_intent: intent, dead_lettered_at: deadLetter ? new Date().toISOString() : null }, row.lease_token);
+      } catch (finalizeError) {
+        // The lease may already be gone (another worker claimed the row, or
+        // the lease expired between claim and finalize). Swallow the error
+        // so the tick keeps running — the row will be re-claimed on the
+        // next poll by whichever worker still owns a valid lease.
+        log("warn", "inbox_finalize_skipped", { correlationId: row.id, reason: "lease_lost_or_expired", error: finalizeError });
+      }
     }
   }
   private async createAccessUrl(phone: string) {

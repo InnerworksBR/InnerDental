@@ -294,7 +294,7 @@ describe("executeRouterTool — RPC-driven executors", () => {
     expect(result.inboxAccessLink?.url).toContain("https://agenda.example/acesso");
   });
 
-  it("accept_plan calls accept_whatsapp_plan_triage with the migration 026 signature (no p_answer_inbox_id)", async () => {
+  it("accept_plan calls accept_whatsapp_plan_triage with the migration 027 signature (includes p_answer_inbox_id)", async () => {
     const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
     const ctx = makeContext({
       slots: { prompted_by_inbox_id: "inbox-prompt" },
@@ -312,9 +312,8 @@ describe("executeRouterTool — RPC-driven executors", () => {
       p_phone: "5513999999999",
       p_insurance_plan_id: "rede-unna",
       p_prompted_by_inbox_id: "inbox-prompt",
+      p_answer_inbox_id: ctx.inboxId,
     });
-    // Migration 026 dropped `p_answer_inbox_id`; the executor must not send it.
-    expect(acceptCall!.args).not.toHaveProperty("p_answer_inbox_id");
     expect(result.reply).toMatchObject({
       title: "Agendar consulta",
       buttons: expect.arrayContaining([expect.objectContaining({ type: "url" })]),

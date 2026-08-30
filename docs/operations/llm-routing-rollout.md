@@ -7,7 +7,7 @@ PR 7 entregou **executors reais** para todas as 18 tools do router LLM. Cada too
 - Lê `whatsapp_conversation_slots` reais antes de chamar o router (`readConversationSlots`).
 - Aplica `slotWrites` retornado pelo executor via `apply_whatsapp_conversation_slots` (necessário para `ask_plan` e `ask_procedure`).
 - Limpa slots antes do `enqueue_human_handoff` via `clear_whatsapp_conversation_slots`.
-- Marca `accept_whatsapp_plan_triage` com a assinatura da migration 026 (sem `p_answer_inbox_id`).
+- Marca `accept_whatsapp_plan_triage` com a assinatura da migration 027 (com `p_answer_inbox_id`).
 - Encaminha `inboxAccessLink` do executor para o worker chamar `mark_whatsapp_access_link_delivered` (necessário para `request_scheduling_link`, `accept_plan`, `confirm_attendance`, `lookup_upcoming_appointment` e `answer_procedure` quando `online_booking=true`).
 
 O fallback automático do worker para o regex cascade **continua funcionando**: qualquer falha do LLM (timeout, schema inválido, RPC quebrado, falta de API key) faz o `tryRouter` devolver `regex_fallback` e o `processInbox` roda `runRegexCascade` inalterado. Métricas `luna_routing_calls_total{outcome}` continuam incrementando.
