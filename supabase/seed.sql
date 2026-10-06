@@ -33,6 +33,7 @@ values
   ('Uniodonto', true, null),
   ('MetLife', true, null),
   ('Transmontano', true, null),
+  ('Santa Casa Saúde', true, null),
   ('Caixa de Pecúlio de São Vicente', false, 'Plano não atendido pela clínica.'),
   ('Caixa de Saúde de São Vicente', false, 'Plano não atendido pela clínica.')
 on conflict (name) do update set active = excluded.active, instructions = excluded.instructions;
